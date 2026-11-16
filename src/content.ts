@@ -3,7 +3,7 @@
 // makes the difference move, which the eye catches. The original table stays in the DOM (hidden), so
 // "Side by side" is always the untouched GitHub rendering.
 //
-// Tables are found by header text, matching the layout the `pr-screenshots` skill writes:
+// Tables are found by header text:
 // | Before | After | (optionally with a label column such as | Viewport | Before | After |).
 
 type Mode = "table" | "slider" | "fade" | "flip" | "diff";
@@ -475,7 +475,7 @@ function allSlides() {
     .flatMap((widget) => widget.slides);
 }
 
-// The pr-screenshots skill puts one italic line under each table saying what the pair fixes.
+// PR authors put one italic line under each table saying what the pair fixes.
 function captionBelow(table: HTMLTableElement) {
   const next = outermostWrapper(table).nextElementSibling;
   const onlyChild = next?.children.length === 1 ? next.firstElementChild : null;

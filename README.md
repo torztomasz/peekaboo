@@ -1,32 +1,71 @@
 # Before/After Compare
 
-Chrome extension that turns `| Before | After |` screenshot tables in GitHub PRs and issues into a
-comparison you can slide, fade, flip or pixel-diff, with a full-screen viewer (← → between pairs, 1–4
-switch modes, Esc closes).
+A Chrome extension for reviewing frontend pull requests. It turns the `| Before | After |` screenshot
+tables in GitHub PRs and issues into one comparison you can **slide**, **fade**, **flip** or **diff**,
+instead of squinting at two thumbnails side by side.
 
-Ported from the Ardia userscript `~/ardia-scripts/before-after-compare.user.ts` so it works in any
-Chromium browser. `dist/content.js` is committed, so the extension loads without a build step.
+![Dragging the slider across a settings card, flipping between versions, then the red/green diff](docs/demo.gif)
+
+## What it does
+
+- **Slider**: drag a divider across the two screenshots, stacked at the same scale.
+- **Fade**: cross-fade one into the other.
+- **Flip**: click or press Space to blink between them; anything that moved jumps.
+- **Diff**: only changed pixels light up, red where Before had something, green where After does.
+- **Full screen**: one pair at a time, ← → through every pair in the PR, 1–4 to switch modes, Esc to close.
+- **Side by side** brings back GitHub's own table, which is never modified, only hidden.
+
+Your chosen mode sticks across tables and PRs. Recordings (videos) get a Play button that starts both in
+step.
+
+## Which tables it picks up
+
+Any table in a comment whose headers start with `Before` and `After`, with an image or video in each cell.
+Extra columns (e.g. `Viewport`, `Theme`) become labels, and a single italic line right under the table
+becomes the caption in full screen:
+
+```markdown
+| Before | After |
+| --- | --- |
+| ![Before: Save button overflows the toolbar](before.png) | ![After: Save button wraps below the title](after.png) |
+
+_Save button overflowed the toolbar on 375px screens; it now wraps below the title._
+```
 
 ## Install
 
-1. `chrome://extensions` → turn on **Developer mode**.
-2. **Load unpacked** → pick this folder.
+From a [release](../../releases) zip, until the Chrome Web Store listing is live:
+
+1. Download and unzip `before-after-compare-<version>.zip`; keep the folder somewhere permanent.
+2. Open `chrome://extensions`, turn on **Developer mode** (top right).
+3. **Load unpacked** → pick the `before-after-compare` folder. Refresh any open GitHub tabs.
+
+Works in Chrome, Edge, Brave, Arc and other Chromium browsers.
+
+## How the diff works
+
+GitHub serves uploaded images without CORS headers, so a canvas can't read their pixels. The browser's
+compositor can still blend them: in an isolated group, `lighten` then `difference` leaves
+`max(0, other − this)` per channel, which an SVG `feColorMatrix` turns into a red or green overlay whose
+opacity grows with the difference, dilated 1px so hairline changes stay visible.
+
+## Privacy
+
+No permissions beyond running on `github.com`, no network requests, no analytics. The only thing stored
+is your last chosen mode, in the page's `localStorage`. See [PRIVACY.md](PRIVACY.md).
 
 ## Develop
 
 ```sh
 npm install
-npm run build   # or: npm run watch
-```
-
-Then hit the reload icon on the extension card and refresh the GitHub tab.
-
-## Share a build
-
-```sh
+npm run build     # or: npm run watch
 npm run package   # → release/before-after-compare-<version>.zip
 ```
 
-The zip holds one `before-after-compare/` folder with only what Chrome loads (manifest, `dist/`, icons).
-Bump `version` in both `manifest.json` and `package.json` first, so reviewers can tell builds apart on
-the `chrome://extensions` card.
+Reload the extension on `chrome://extensions` and refresh the GitHub tab after a build. Bump `version` in
+both `manifest.json` and `package.json` before packaging. `store/` holds the Chrome Web Store listing text
+and images.
+
+## License
+
+[MIT](LICENSE)

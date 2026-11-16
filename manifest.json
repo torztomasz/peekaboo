@@ -27,5 +27,6 @@
       "32": "icons/icon-32.png"
     },
     "default_title": "Before/After Compare: open a GitHub PR with a Before | After screenshot table"
-  }
+  },
+  "homepage_url": "https://github.com/torztomasz/before-after-compare"
 }
