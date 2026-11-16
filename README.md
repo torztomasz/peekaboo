@@ -40,12 +40,12 @@ _Save button overflowed the toolbar on 375px screens; it now wraps below the tit
 ### Let your coding agent write them
 
 Nothing else is needed: hand-written tables work. If agents write your PRs, the
-[`pr-screenshots`](skills/pr-screenshots/SKILL.md) skill in this repo teaches them this exact layout (one
-table and caption per change, fair before/after captures, uploads via `gh --attach`). It's optional. Copy
-it into your agent's skills folder, e.g. for Claude Code:
+[`pr-screenshots`](https://github.com/torztomasz/skills/tree/main/skills/pr-screenshots) skill teaches them
+this exact layout (one table and caption per change, fair before/after captures, uploads via
+`gh --attach`). It's optional:
 
 ```sh
-cp -r skills/pr-screenshots ~/.claude/skills/
+npx skills add torztomasz/skills --skill pr-screenshots -g
 ```
 
 ## Install
