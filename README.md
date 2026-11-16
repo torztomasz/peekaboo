@@ -10,7 +10,7 @@ A Chrome extension for reviewing frontend pull requests. It turns the `| Before 
 tables in GitHub PRs and issues into one image you can **flip**, **fade** or **diff**, instead of squinting
 at two thumbnails side by side.
 
-![Flipping between the old and new version of a settings card, then the red/green diff](docs/demo.gif)
+![Flipping between two versions of an invoices page, fading between them, then Diff showing a removed nav link in red and restyled status pills in green](docs/demo.gif)
 
 ## What it does
 
