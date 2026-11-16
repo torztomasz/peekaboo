@@ -1,10 +1,11 @@
 {
   "name": "before-after-compare",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "build": "esbuild src/content.ts --bundle --format=iife --target=chrome120 --outfile=dist/content.js",
-    "watch": "npm run build -- --watch"
+    "watch": "npm run build -- --watch",
+    "package": "sh scripts/package.sh"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

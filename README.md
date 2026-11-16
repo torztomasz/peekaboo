@@ -20,3 +20,13 @@ npm run build   # or: npm run watch
 ```
 
 Then hit the reload icon on the extension card and refresh the GitHub tab.
+
+## Share a build
+
+```sh
+npm run package   # → release/before-after-compare-<version>.zip
+```
+
+The zip holds one `before-after-compare/` folder with only what Chrome loads (manifest, `dist/`, icons).
+Bump `version` in both `manifest.json` and `package.json` first, so reviewers can tell builds apart on
+the `chrome://extensions` card.
