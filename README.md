@@ -57,6 +57,12 @@ Peekaboo isn't on the Chrome Web Store; install it from a [release](../../releas
 
 Works in Chrome, Edge, Brave, Arc and other Chromium browsers.
 
+### As a userscript
+
+[`src/peekaboo.user.ts`](src/peekaboo.user.ts) wraps the same code with a userscript header, for userscript
+managers that build TypeScript (e.g. Ardia: `ardia scripts install src/peekaboo.user.ts`). For Violentmonkey or
+Tampermonkey, prepend that header to `dist/content.js`.
+
 ## How the diff works
 
 GitHub serves uploaded images without CORS headers, so a canvas can't read their pixels. The browser's
