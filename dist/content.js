@@ -330,10 +330,10 @@
           waitingForPermission = true;
           const allow = el("button", `${PREFIX}-expand`);
           allow.type = "button";
-          allow.textContent = "Allow Auto";
-          allow.title = "Auto reads the two images from GitHub's image server; Chrome asks you once";
+          allow.textContent = "Turn on Auto-align";
+          allow.title = "Opens Peekaboo's settings next to this tab; you come back here once it's on";
           allow.addEventListener("click", () => chrome.runtime.sendMessage({ type: "open-options" }));
-          status.append("Centred for now. ", allow);
+          status.append("Centred for now. Peekaboo can line them up exactly: ", allow);
         } else {
           status.textContent = "Couldn't line them up; centred instead.";
         }

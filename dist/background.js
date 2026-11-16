@@ -8,9 +8,20 @@
       findOffset(message).then(reply, (error) => reply({ error: String(error) }));
       return true;
     }
-    if (message?.type === "open-options") chrome.runtime.openOptionsPage();
+    if (message?.type === "open-options") openSettings(_sender.tab);
     return false;
   });
+  chrome.runtime.onInstalled.addListener(({ reason }) => {
+    if (reason === "install") chrome.tabs.create({ url: chrome.runtime.getURL("options.html?welcome") });
+  });
+  chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
+  function openSettings(tab) {
+    if (tab?.id == null) {
+      chrome.runtime.openOptionsPage();
+      return;
+    }
+    chrome.tabs.create({ url: chrome.runtime.getURL(`options.html?from=${tab.id}`), index: tab.index + 1, openerTabId: tab.id });
+  }
   var CONTAINED_MAX_ERROR = 6;
   async function findOffset({ before, after }) {
     if (!await chrome.permissions.contains({ origins: IMAGE_ORIGINS })) return { needsPermission: true };

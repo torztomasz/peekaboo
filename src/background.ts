@@ -13,9 +13,22 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     findOffset(message as AlignRequest).then(reply, (error) => reply({ error: String(error) }));
     return true;
   }
-  if (message?.type === "open-options") chrome.runtime.openOptionsPage();
+  if (message?.type === "open-options") openSettings(_sender.tab);
   return false;
 });
+
+// Onboarding: a welcome tab on first install, and the toolbar icon opens the same page, since that is
+// where people look for an extension's settings.
+chrome.runtime.onInstalled.addListener(({ reason }) => {
+  if (reason === "install") chrome.tabs.create({ url: chrome.runtime.getURL("options.html?welcome") });
+});
+chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
+
+// From a pull request: next to it, about that one step, so the page can send the reviewer back.
+function openSettings(tab?: chrome.tabs.Tab) {
+  if (tab?.id == null) { chrome.runtime.openOptionsPage(); return; }
+  chrome.tabs.create({ url: chrome.runtime.getURL(`options.html?from=${tab.id}`), index: tab.index + 1, openerTabId: tab.id });
+}
 
 // Where each screenshot sits on a shared canvas, in their own (equal) pixel scale.
 // First: is one a crop of the other (a viewport inside a full page, a detail inside a screen)? Then it is

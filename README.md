@@ -78,8 +78,9 @@ opacity grows with the difference, dilated 1px so hairline changes stay visible.
 ## Privacy
 
 Installs with no permissions beyond running on `github.com`, and no analytics. **Auto** alignment is the one
-exception, and it's optional: the first time you pick it, Peekaboo asks once to read images from GitHub's
-image server (`private-user-images.githubusercontent.com`), because GitHub serves uploads without CORS headers
+exception, and it's optional: turn it on from the welcome tab that opens on install, from the toolbar icon
+(it opens Peekaboo's settings), or from the prompt on a pull request whose screenshots differ in size.
+Chrome then asks once to read images from GitHub's image server (`private-user-images.githubusercontent.com`), because GitHub serves uploads without CORS headers
 and page code can't read their pixels. Without it, Left, Center and Right still work. The only things stored
 are your chosen mode and alignment, in the page's `localStorage`. See [PRIVACY.md](PRIVACY.md).
 
