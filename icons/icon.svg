@@ -1,10 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs><clipPath id="r"><rect x="8" y="8" width="112" height="112" rx="26"/></clipPath></defs>
-  <g clip-path="url(#r)">
-    <rect x="0" y="0" width="64" height="128" fill="#d1242f"/>
-    <rect x="64" y="0" width="64" height="128" fill="#1a7f37"/>
+  <!-- Peekaboo: two eyes peeking over a ledge. Orange #ff7a1f and blue-black #050f16, the launch palette. -->
+  <defs><clipPath id="tile"><rect x="16" y="16" width="96" height="96" rx="24"/></clipPath></defs>
+  <g clip-path="url(#tile)">
+    <rect x="16" y="16" width="96" height="96" fill="#ff7a1f"/>
+    <circle cx="45" cy="73" r="17" fill="#ffffff"/>
+    <circle cx="83" cy="73" r="17" fill="#ffffff"/>
+    <circle cx="50" cy="67" r="8" fill="#050f16"/>
+    <circle cx="88" cy="67" r="8" fill="#050f16"/>
+    <rect x="16" y="76" width="96" height="40" fill="#050f16"/>
   </g>
-  <path d="M20 64 Q64 22 108 64 Q64 106 20 64 Z" fill="#fff"/>
-  <circle cx="64" cy="64" r="17" fill="#1f2328"/>
-  <circle cx="70" cy="58" r="5" fill="#fff"/>
 </svg>

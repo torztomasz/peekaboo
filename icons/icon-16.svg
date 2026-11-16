@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- 16px cut of the Peekaboo icon: pixel-aligned eyes without pupils, which only blur at this size. -->
+  <rect x="0" y="0" width="16" height="16" rx="4" fill="#ff7a1f"/>
+  <path d="M0 10 H16 V12 A4 4 0 0 1 12 16 H4 A4 4 0 0 1 0 12 Z" fill="#050f16"/>
+  <rect x="3" y="6" width="4" height="4" rx="1.6" fill="#ffffff"/>
+  <rect x="9" y="6" width="4" height="4" rx="1.6" fill="#ffffff"/>
+  <rect x="5" y="7" width="2" height="2" fill="#050f16"/>
+  <rect x="11" y="7" width="2" height="2" fill="#050f16"/>
+</svg>
