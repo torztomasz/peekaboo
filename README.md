@@ -10,7 +10,7 @@ A Chrome extension for reviewing frontend pull requests. It turns the `| Before 
 tables in GitHub PRs and issues into one image you can **flip** or **diff**, instead of squinting
 at two thumbnails side by side.
 
-![Starting from GitHub's side-by-side table, clicking Flip, flipping between two versions of an invoices page, then Diff showing a removed nav link in red and restyled status pills in green](docs/demo.gif)
+![Without Peekaboo: GitHub's side-by-side table. With Peekaboo: clicking Flip swaps before and after in place, then Diff shows a removed nav link in red and restyled status pills in green](docs/demo.gif)
 
 ## What it does
 
