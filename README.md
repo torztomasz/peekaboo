@@ -1,4 +1,10 @@
-# Peekaboo
+<p align="center">
+  <img src="icons/icon-128.png" alt="Peekaboo icon: an eye over a red and green split" width="96" height="96">
+</p>
+
+<h1 align="center">Peekaboo</h1>
+
+<p align="center">Flip, fade or diff the Before/After screenshots in GitHub pull requests.</p>
 
 A Chrome extension for reviewing frontend pull requests. It turns the `| Before | After |` screenshot
 tables in GitHub PRs and issues into one image you can **flip**, **fade** or **diff**, instead of squinting
