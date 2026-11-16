@@ -39,7 +39,7 @@ _Save button overflowed the toolbar on 375px screens; it now wraps below the tit
 
 ## Install
 
-From a [release](../../releases) zip, until the Chrome Web Store listing is live:
+Peekaboo isn't on the Chrome Web Store; install it from a [release](../../releases) zip:
 
 1. Download and unzip `peekaboo-<version>.zip`; keep the folder somewhere permanent.
 2. Open `chrome://extensions`, turn on **Developer mode** (top right).
@@ -68,8 +68,8 @@ npm run package   # → release/peekaboo-<version>.zip
 ```
 
 Reload the extension on `chrome://extensions` and refresh the GitHub tab after a build. Bump `version` in
-both `manifest.json` and `package.json` before packaging. `store/` holds the Chrome Web Store listing text
-and images.
+both `manifest.json` and `package.json` before packaging. `store/` holds listing text and images kept for a
+possible Chrome Web Store submission later.
 
 ## License
 
