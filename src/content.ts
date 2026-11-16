@@ -158,7 +158,7 @@ function buildStage(pair: Pair) {
     caption.textContent = pair.label;
     root.append(caption);
   }
-  setNaturalSize(frame, pair.after);
+  fitPair(root, frame, pair);
 
   let mode: Mode = DEFAULT_MODE;
   let showingBefore = true;
@@ -180,6 +180,17 @@ function buildStage(pair: Pair) {
     }
   }
 
+  frame.addEventListener("peekaboo:diff", (event) => {
+    const url = (event as CustomEvent<string | null>).detail;
+    diff.replaceChildren();
+    if (url) {
+      const img = el("img", `${PREFIX}-diff-image`);
+      img.src = url;
+      img.alt = "";
+      diff.append(img);
+    }
+    render();
+  });
   frame.addEventListener("pointerdown", () => {
     if (frame.dataset.mode !== "flip") return;
     showingBefore = !showingBefore;
@@ -210,18 +221,21 @@ function buildStage(pair: Pair) {
 // opacity grows with the difference, dilated 1px so hairline changes (a border, a 1px shift) stay visible.
 // "Darker" means ink on light screenshots; on dark screenshots the colours swap.
 function buildDiffLayers(beforeSource: HTMLImageElement | HTMLVideoElement, afterSource: HTMLImageElement | HTMLVideoElement) {
-  const onlyBefore = diffLayer(beforeSource, afterSource, "removed");
-  const onlyAfter = diffLayer(afterSource, beforeSource, "added");
+  const onlyBefore = diffLayer([beforeSource, "before"], [afterSource, "after"], "removed");
+  const onlyAfter = diffLayer([afterSource, "after"], [beforeSource, "before"], "added");
   return [onlyBefore, onlyAfter];
 }
 
 // Pixels where `darker` is darker than `other`: max(other, darker) − darker = max(0, other − darker).
-function diffLayer(darker: HTMLImageElement | HTMLVideoElement, other: HTMLImageElement | HTMLVideoElement, kind: "removed" | "added") {
+type Side = "before" | "after";
+type Sided = [HTMLImageElement | HTMLVideoElement, Side];
+
+function diffLayer([darker, darkerSide]: Sided, [other, otherSide]: Sided, kind: "removed" | "added") {
   const group = el("div", `${PREFIX}-diff-layer ${PREFIX}-diff-${kind}`);
-  const base = cloneMedia(darker, "diff-part");
-  const lighten = cloneMedia(other, "diff-part");
+  const base = cloneMedia(darker, "diff-part", darkerSide);
+  const lighten = cloneMedia(other, "diff-part", otherSide);
   lighten.style.mixBlendMode = "lighten";
-  const subtract = cloneMedia(darker, "diff-part");
+  const subtract = cloneMedia(darker, "diff-part", darkerSide);
   subtract.style.mixBlendMode = "difference";
   group.append(base, lighten, subtract);
   return group;
@@ -249,12 +263,13 @@ function ensureDiffFilters() {
 }
 
 // Both sides scale to the same width so screenshots taken at the same viewport line up pixel for pixel.
-function cloneMedia(source: HTMLImageElement | HTMLVideoElement, side: "before" | "after" | "diff-part") {
+function cloneMedia(source: HTMLImageElement | HTMLVideoElement, side: Side | "diff-part", from: Side = side as Side) {
   const media = source.cloneNode(true) as HTMLImageElement | HTMLVideoElement;
   media.removeAttribute("style");
   media.removeAttribute("width");
   media.removeAttribute("height");
   media.className = `${PREFIX}-media ${PREFIX}-${side}`;
+  media.dataset.from = from;
   media.draggable = false;
   if (media instanceof HTMLVideoElement) {
     media.controls = false;
@@ -265,17 +280,138 @@ function cloneMedia(source: HTMLImageElement | HTMLVideoElement, side: "before" 
   return media;
 }
 
-// Caps the comparison at the screenshot's real width, so a 400px crop isn't blown up to the column width.
-function setNaturalSize(frame: HTMLElement, source: HTMLImageElement | HTMLVideoElement) {
+// Two screenshots of different widths are either the same view at another pixel density (a 2560px retina
+// capture of a 1280px window), which should be scaled to match, or two different crops or window sizes,
+// which must keep one pixel scale so the content lines up, with the narrower one placed inside the wider.
+// Auto finds that place from the pixels; GitHub serves uploads without CORS, so only the extension's
+// background worker can read them, after the reviewer grants the optional image-host permission once.
+const DENSITIES = [1.25, 1.5, 2, 3];
+const ALIGN_KEY = "peekaboo-align";
+type Align = "auto" | "left" | "center" | "right";
+const CAN_AUTO = typeof chrome !== "undefined" && Boolean(chrome.runtime?.id);
+const ALIGNS: { align: Align; label: string }[] = [
+  ...(CAN_AUTO ? [{ align: "auto" as Align, label: "Auto" }] : []),
+  { align: "left", label: "Left" },
+  { align: "center", label: "Center" },
+  { align: "right", label: "Right" },
+];
+const alignListeners = new Set<() => void>();
+
+function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
+  let done = false;
   const apply = () => {
-    const width = source instanceof HTMLImageElement ? source.naturalWidth : source.videoWidth;
-    const height = source instanceof HTMLImageElement ? source.naturalHeight : source.videoHeight;
-    if (!width || !height) return;
-    frame.style.setProperty("--natural-width", `${width}px`);
-    frame.style.setProperty("--aspect", String(width / height));
+    const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
+    if (done || !bw || !aw) return;
+    done = true;
+    const ratio = aw / bw;
+    const near = (a: number, b: number) => Math.abs(a / b - 1) < 0.02;
+    const sameScale = Math.abs(ratio - 1) < 0.01 || DENSITIES.some((d) => near(ratio, d) || near(1 / ratio, d));
+    if (sameScale) {
+      frame.style.setProperty("--natural-width", `${aw}px`);
+      frame.style.setProperty("--aspect", String(aw / ah));
+      return;
+    }
+    const wide = Math.max(bw, aw);
+    frame.style.setProperty("--natural-width", `${wide}px`);
+    frame.style.setProperty("--aspect", String(wide / Math.max(bh, ah)));
+    frame.style.setProperty("--before-w", `${(bw / wide) * 100}%`);
+    frame.style.setProperty("--after-w", `${(aw / wide) * 100}%`);
+    root.insertBefore(buildAlignBar(frame, pair, bw, aw), frame.nextSibling);
   };
+  for (const media of [pair.before, pair.after]) {
+    media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
+  }
   apply();
-  source.addEventListener(source instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
+}
+
+function naturalSize(media: HTMLImageElement | HTMLVideoElement) {
+  return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
+}
+
+function buildAlignBar(frame: HTMLElement, pair: Pair, beforeWidth: number, afterWidth: number) {
+  const wide = Math.max(beforeWidth, afterWidth), slack = Math.abs(beforeWidth - afterWidth);
+  const narrowSide = beforeWidth < afterWidth ? "before" : "after";
+  const images = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
+  const bar = el("div", `${PREFIX}-align`);
+  const note = el("span", `${PREFIX}-align-note`);
+  note.textContent = `Different widths (before ${beforeWidth}px, after ${afterWidth}px). Line them up by`;
+  const segmented = el("div", `${PREFIX}-segmented`);
+  const buttons = ALIGNS.filter(({ align }) => align !== "auto" || images).map(({ align, label }) => {
+    const button = el("button", `${PREFIX}-mode`);
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      try { localStorage.setItem(ALIGN_KEY, align); } catch {}
+      for (const listener of alignListeners) listener();
+    });
+    return { align, button };
+  });
+  segmented.append(...buttons.map(({ button }) => button));
+  const status = el("span", `${PREFIX}-align-note`);
+  bar.append(note, segmented, status);
+
+  const place = (offset: number) => {
+    frame.style.setProperty(`--${narrowSide}-x`, `${(offset / wide) * 100}%`);
+    frame.style.setProperty(`--${narrowSide === "before" ? "after" : "before"}-x`, "0%");
+  };
+  let autoOffset: number | null = null;
+  let autoDiff: string | null = null;
+  let shownDiff: string | null = null;
+  const showDiff = (url: string | null) => {
+    if (url === shownDiff) return;
+    shownDiff = url;
+    frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: url }));
+  };
+  let waitingForPermission = false;
+  const runAuto = () => {
+    status.textContent = "Lining up…";
+    chrome.runtime.sendMessage({ type: "align", before: (pair.before as HTMLImageElement).currentSrc, after: (pair.after as HTMLImageElement).currentSrc }, (response) => {
+      status.replaceChildren();
+      if (response?.dx != null) {
+        autoOffset = response.dx; autoDiff = response.diff; waitingForPermission = false;
+        sync();
+        return;
+      }
+      place(slack / 2);
+      if (response?.needsPermission) {
+        waitingForPermission = true;
+        const allow = el("button", `${PREFIX}-expand`);
+        allow.type = "button";
+        allow.textContent = "Allow Auto";
+        allow.title = "Auto reads the two images from GitHub's image server; Chrome asks you once";
+        allow.addEventListener("click", () => chrome.runtime.sendMessage({ type: "open-options" }));
+        status.append("Centred for now. ", allow);
+      } else {
+        status.textContent = "Couldn't line them up; centred instead.";
+      }
+    });
+  };
+  // Back from the options page with the permission granted: try again.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && waitingForPermission && loadAlign() === "auto") runAuto();
+  });
+  const sync = () => {
+    const current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
+    for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
+    if (current !== "auto") status.replaceChildren();
+    showDiff(current === "auto" ? autoDiff : null);
+    if (current === "left") place(0);
+    else if (current === "center") place(slack / 2);
+    else if (current === "right") place(slack);
+    else if (autoOffset != null) place(autoOffset);
+    else runAuto();
+  };
+  alignListeners.add(sync);
+  sync();
+  return bar;
+}
+
+function loadAlign(): Align {
+  try {
+    const saved = localStorage.getItem(ALIGN_KEY);
+    if (ALIGNS.some(({ align }) => align === saved)) return saved as Align;
+  } catch {}
+  return CAN_AUTO ? "auto" : "left";
 }
 
 function buildPlayButton(stages: ReturnType<typeof buildStage>[]) {
@@ -513,7 +649,10 @@ function injectStyles() {
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
-.${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; }
+.${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
+.${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin-left: var(--before-x, 0%); }
+.${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin-left: var(--after-x, 0%); }
+.${PREFIX}-align { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
 .${PREFIX}-tag {
   position: absolute; top: 8px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
   background: rgb(0 0 0 / 0.65); color: #fff; pointer-events: none;
@@ -528,6 +667,7 @@ function injectStyles() {
 .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed); }
 .${PREFIX}-diff-added { filter: url(#${PREFIX}-added); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
+.${PREFIX}-diff-image { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1); opacity: 0.25; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }

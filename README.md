@@ -17,6 +17,9 @@ at two thumbnails side by side.
 - **Flip** (default): click or press Space to blink between before and after. Anything that changed jumps.
 - **Diff**: only changed pixels light up, red where Before had something, green where After does.
 - **Side by side**: GitHub's own table, which is never modified, only hidden.
+- **Different widths**: a retina capture next to a normal one is scaled to match. Screenshots taken at
+  different window widths keep one pixel scale and line up by **Auto** (Peekaboo finds the offset where
+  they match and diffs them at full resolution), or by the left edge, centre or right edge.
 - **Full screen**: one pair at a time, ← → through every pair in the PR, 1–2 to switch modes, Esc to close.
 
 Your chosen mode sticks across tables and PRs. Recordings (videos) get a Play button that starts both in
@@ -72,8 +75,11 @@ opacity grows with the difference, dilated 1px so hairline changes stay visible.
 
 ## Privacy
 
-No permissions beyond running on `github.com`, no network requests, no analytics. The only thing stored
-is your last chosen mode, in the page's `localStorage`. See [PRIVACY.md](PRIVACY.md).
+Installs with no permissions beyond running on `github.com`, and no analytics. **Auto** alignment is the one
+exception, and it's optional: the first time you pick it, Peekaboo asks once to read images from GitHub's
+image server (`private-user-images.githubusercontent.com`), because GitHub serves uploads without CORS headers
+and page code can't read their pixels. Without it, Left, Center and Right still work. The only things stored
+are your chosen mode and alignment, in the page's `localStorage`. See [PRIVACY.md](PRIVACY.md).
 
 ## Build it yourself
 

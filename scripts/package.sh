@@ -7,7 +7,7 @@ npm run build --silent
 version=$(node -p 'require("./manifest.json").version')
 stage=$(mktemp -d)
 mkdir "$stage/peekaboo"
-cp -R manifest.json dist icons "$stage/peekaboo/"
+cp -R manifest.json options.html dist icons "$stage/peekaboo/"
 rm -f "$stage/peekaboo/icons/icon.svg"
 mkdir -p release
 rm -f "release/peekaboo-$version.zip"

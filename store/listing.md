@@ -42,7 +42,8 @@ No extra permissions, no network requests, no tracking. Open source (MIT): https
 **Single purpose**: Displays the Before/After screenshot tables in GitHub pull requests and issues as an interactive comparison (flip, diff).
 
 **Permission justification**
-- Host access to https://github.com/* (content script): the extension only works on GitHub pull request and issue pages, where it finds Before/After screenshot tables and renders the comparison next to them. It requests no other permissions.
+- Host access to https://github.com/* (content script): the extension only works on GitHub pull request and issue pages, where it finds Before/After screenshot tables and renders the comparison next to them. No other permissions are required.
+- Optional host access to https://private-user-images.githubusercontent.com/* and https://user-images.githubusercontent.com/* (requested from the options page only when the user turns on Auto alignment): GitHub serves uploaded screenshots without CORS headers, so the extension's background worker downloads the two images of a pair to find the offset where they line up and compute the pixel diff. Nothing is stored or sent anywhere.
 - Remote code: No. All code ships in the package.
 
 **Data usage**: collects none of the listed data types. Certify: not sold to third parties; not used for purposes unrelated to the single purpose; not used for creditworthiness or lending.
