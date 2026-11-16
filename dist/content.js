@@ -237,12 +237,27 @@
         frame.style.setProperty("--aspect", String(aw / ah));
         return;
       }
+      if (bw === aw) {
+        frame.style.setProperty("--natural-width", `${aw}px`);
+        frame.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
+        if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
+        requestAlign(pair, (response) => {
+          const p = response?.placement;
+          if (!p || !p.beforeY && !p.afterY) return;
+          root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], { placement: p, diff: response.diff }), frame.nextSibling);
+        });
+        return;
+      }
       root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah]), frame.nextSibling);
     };
     for (const media of [pair.before, pair.after]) {
       media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
     }
     apply();
+  }
+  var canAutoAlign = (pair) => CAN_AUTO && pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
+  function requestAlign(pair, done) {
+    chrome.runtime.sendMessage({ type: "align", before: pair.before.currentSrc, after: pair.after.currentSrc }, done);
   }
   function naturalSize(media) {
     return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
@@ -259,15 +274,16 @@
     frame.style.setProperty("--before-y", pct(p.beforeY));
     frame.style.setProperty("--after-y", pct(p.afterY));
   }
-  function buildAlignBar(frame, pair, beforeSize, afterSize) {
+  function buildAlignBar(frame, pair, beforeSize, afterSize, found) {
     const [bw, bh] = beforeSize, [aw, ah] = afterSize;
     const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
-    const images = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
+    const images = canAutoAlign(pair);
     const bar = el("div", `${PREFIX}-align`);
     const note = el("span", `${PREFIX}-align-note`);
-    note.textContent = `Different sizes (before ${bw} \xD7 ${bh}, after ${aw} \xD7 ${ah}). Line them up by`;
+    note.textContent = found ? `One screenshot is a crop of the other (before ${bw} \xD7 ${bh}, after ${aw} \xD7 ${ah}). Line them up by` : `Different sizes (before ${bw} \xD7 ${bh}, after ${aw} \xD7 ${ah}). Line them up by`;
     const segmented = el("div", `${PREFIX}-segmented`);
-    const buttons = ALIGNS.filter(({ align }) => align !== "auto" || images).map(({ align, label }) => {
+    const choices = found ? [{ align: "auto", label: "Auto" }, { align: "left", label: "Top" }] : ALIGNS.filter(({ align }) => align !== "auto" || images);
+    const buttons = choices.map(({ align, label }) => {
       const button = el("button", `${PREFIX}-mode`);
       button.type = "button";
       button.textContent = label;
@@ -289,8 +305,8 @@
       afterSize,
       beforeNarrow ? { beforeX: offset, beforeY: 0, afterX: 0, afterY: 0 } : { beforeX: 0, beforeY: 0, afterX: offset, afterY: 0 }
     );
-    let autoPlacement = null;
-    let autoDiff = null;
+    let autoPlacement = found?.placement ?? null;
+    let autoDiff = found?.diff ?? null;
     let shownDiff = null;
     const showDiff = (url) => {
       if (url === shownDiff) return;
@@ -300,7 +316,7 @@
     let waitingForPermission = false;
     const runAuto = () => {
       status.textContent = "Lining up\u2026";
-      chrome.runtime.sendMessage({ type: "align", before: pair.before.currentSrc, after: pair.after.currentSrc }, (response) => {
+      requestAlign(pair, (response) => {
         status.replaceChildren();
         if (response?.placement) {
           autoPlacement = response.placement;
@@ -327,7 +343,8 @@
       if (document.visibilityState === "visible" && waitingForPermission && loadAlign() === "auto") runAuto();
     });
     const sync2 = () => {
-      const current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
+      let current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
+      if (found && current !== "auto") current = "left";
       for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
       if (current !== "auto") status.replaceChildren();
       showDiff(current === "auto" ? autoDiff : null);

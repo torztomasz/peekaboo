@@ -314,12 +314,31 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
       frame.style.setProperty("--aspect", String(aw / ah));
       return;
     }
+    // Same width, different heights: usually a page that got longer or shorter, so top-aligned is right
+    // and edge buttons would do nothing. Only a crop of the other (found by Auto) earns the bar.
+    if (bw === aw) {
+      frame.style.setProperty("--natural-width", `${aw}px`);
+      frame.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
+      if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
+      requestAlign(pair, (response) => {
+        const p = response?.placement as Placement | undefined;
+        if (!p || (!p.beforeY && !p.afterY)) return;
+        root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], { placement: p, diff: response.diff }), frame.nextSibling);
+      });
+      return;
+    }
     root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah]), frame.nextSibling);
   };
   for (const media of [pair.before, pair.after]) {
     media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
   }
   apply();
+}
+
+const canAutoAlign = (pair: Pair) => CAN_AUTO && pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
+
+function requestAlign(pair: Pair, done: (response: any) => void) {
+  chrome.runtime.sendMessage({ type: "align", before: (pair.before as HTMLImageElement).currentSrc, after: (pair.after as HTMLImageElement).currentSrc }, done);
 }
 
 function naturalSize(media: HTMLImageElement | HTMLVideoElement) {
@@ -338,15 +357,19 @@ function placeOnCanvas(frame: HTMLElement, [bw, bh]: number[], [aw, ah]: number[
   frame.style.setProperty("--before-y", pct(p.beforeY)); frame.style.setProperty("--after-y", pct(p.afterY));
 }
 
-function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], afterSize: number[]) {
+// `found` is a crop placement Auto already made for a same-width pair: that bar offers only Auto and Top.
+function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], afterSize: number[], found?: { placement: Placement; diff: string }) {
   const [bw, bh] = beforeSize, [aw, ah] = afterSize;
   const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
-  const images = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
+  const images = canAutoAlign(pair);
   const bar = el("div", `${PREFIX}-align`);
   const note = el("span", `${PREFIX}-align-note`);
-  note.textContent = `Different sizes (before ${bw} × ${bh}, after ${aw} × ${ah}). Line them up by`;
+  note.textContent = found
+    ? `One screenshot is a crop of the other (before ${bw} × ${bh}, after ${aw} × ${ah}). Line them up by`
+    : `Different sizes (before ${bw} × ${bh}, after ${aw} × ${ah}). Line them up by`;
   const segmented = el("div", `${PREFIX}-segmented`);
-  const buttons = ALIGNS.filter(({ align }) => align !== "auto" || images).map(({ align, label }) => {
+  const choices = found ? [{ align: "auto" as Align, label: "Auto" }, { align: "left" as Align, label: "Top" }] : ALIGNS.filter(({ align }) => align !== "auto" || images);
+  const buttons = choices.map(({ align, label }) => {
     const button = el("button", `${PREFIX}-mode`);
     button.type = "button";
     button.textContent = label;
@@ -362,8 +385,8 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
 
   const placeSideways = (offset: number) => placeOnCanvas(frame, beforeSize, afterSize,
     beforeNarrow ? { beforeX: offset, beforeY: 0, afterX: 0, afterY: 0 } : { beforeX: 0, beforeY: 0, afterX: offset, afterY: 0 });
-  let autoPlacement: Placement | null = null;
-  let autoDiff: string | null = null;
+  let autoPlacement: Placement | null = found?.placement ?? null;
+  let autoDiff: string | null = found?.diff ?? null;
   let shownDiff: string | null = null;
   const showDiff = (url: string | null) => {
     if (url === shownDiff) return;
@@ -373,7 +396,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
   let waitingForPermission = false;
   const runAuto = () => {
     status.textContent = "Lining up…";
-    chrome.runtime.sendMessage({ type: "align", before: (pair.before as HTMLImageElement).currentSrc, after: (pair.after as HTMLImageElement).currentSrc }, (response) => {
+    requestAlign(pair, (response) => {
       status.replaceChildren();
       if (response?.placement) {
         autoPlacement = response.placement; autoDiff = response.diff; waitingForPermission = false;
@@ -399,7 +422,8 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     if (document.visibilityState === "visible" && waitingForPermission && loadAlign() === "auto") runAuto();
   });
   const sync = () => {
-    const current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
+    let current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
+    if (found && current !== "auto") current = "left";
     for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
     if (current !== "auto") status.replaceChildren();
     showDiff(current === "auto" ? autoDiff : null);
