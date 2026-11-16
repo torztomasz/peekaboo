@@ -5,7 +5,8 @@
 import { IMAGE_ORIGINS } from "./origins";
 
 type AlignRequest = { type: "align"; before: string; after: string };
-type AlignResponse = { dx: number; diff: string } | { needsPermission: true } | { error: string };
+type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
+type AlignResponse = { placement: Placement; diff: string } | { needsPermission: true } | { error: string };
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message?.type === "align") {
@@ -16,21 +17,72 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   return false;
 });
 
-// Where the narrower screenshot's left edge sits inside the wider one, in the wider one's pixels.
+// Where each screenshot sits on a shared canvas, in their own (equal) pixel scale.
+// First: is one a crop of the other (a viewport inside a full page, a detail inside a screen)? Then it is
+// placed where it matches, in both directions, but only on a near-perfect match: a loose fit would line up
+// the wrong part of a page whose layout really shifted, and hide that shift. Otherwise the screenshots are
+// two window widths of one page: top-aligned, the narrower slid sideways to where the two match best.
+const CONTAINED_MAX_ERROR = 6;
+
 async function findOffset({ before, after }: AlignRequest): Promise<AlignResponse> {
   if (!(await chrome.permissions.contains({ origins: IMAGE_ORIGINS }))) return { needsPermission: true };
-  const [a, b] = await Promise.all([load(before), load(after)]);
-  const beforeIsWide = a.width >= b.width;
-  const [wide, narrow] = beforeIsWide ? [a, b] : [b, a];
-  const slack = wide.width - narrow.width;
+  const [b, a] = await Promise.all([load(before), load(after)]);
+  const fits = (outer: ImageBitmap, inner: ImageBitmap) => outer.width >= inner.width && outer.height >= inner.height;
+  let placement: Placement | null = null;
+  if (fits(b, a) || fits(a, b)) {
+    const beforeOutside = fits(b, a);
+    const found = locate(beforeOutside ? b : a, beforeOutside ? a : b);
+    if (found.error <= CONTAINED_MAX_ERROR) {
+      placement = beforeOutside ? { beforeX: 0, beforeY: 0, afterX: found.x, afterY: found.y } : { beforeX: found.x, beforeY: found.y, afterX: 0, afterY: 0 };
+    }
+  }
+  if (!placement) {
+    const beforeIsWide = b.width >= a.width;
+    const dx = slideSideways(beforeIsWide ? b : a, beforeIsWide ? a : b);
+    placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
+  }
+  return { placement, diff: await diffImage(b, a, placement) };
+}
 
+function slideSideways(wide: ImageBitmap, narrow: ImageBitmap) {
+  const slack = wide.width - narrow.width;
   // Pass 1: both shrunk so the wide one is about 400px across, every offset compared.
   const scale = Math.min(1, 400 / wide.width);
   const coarse = bestOffset(gray(wide, scale), gray(narrow, scale), Math.round(slack * scale), Math.ceil(16 * scale));
   // Pass 2: full size, within the coarse step either side.
   const step = Math.ceil(1 / scale) + 1;
-  const fine = bestOffset(gray(wide, 1), gray(narrow, 1), slack, 0, Math.round(coarse / scale) - step, Math.round(coarse / scale) + step);
-  return { dx: fine, diff: await diffImage(a, b, beforeIsWide ? 0 : fine, beforeIsWide ? fine : 0) };
+  return bestOffset(gray(wide, 1), gray(narrow, 1), slack, 0, Math.round(coarse / scale) - step, Math.round(coarse / scale) + step);
+}
+
+// Template match of `inner` inside `outer`: every position on a shrunk copy, then exact around the best.
+function locate(outer: ImageBitmap, inner: ImageBitmap) {
+  let scale = Math.min(1, 240 / Math.max(outer.width, outer.height));
+  scale = Math.min(1, Math.max(scale, 24 / Math.min(inner.width, inner.height)));
+  const coarse = match(gray(outer, scale), gray(inner, scale), 0, Math.round((outer.width - inner.width) * scale), 0, Math.round((outer.height - inner.height) * scale), 1);
+  const step = Math.ceil(1 / scale) + 1;
+  const cx = Math.round(coarse.x / scale), cy = Math.round(coarse.y / scale);
+  const o = gray(outer, 1), i = gray(inner, 1);
+  return match(o, i, Math.max(0, cx - step), Math.min(outer.width - inner.width, cx + step), Math.max(0, cy - step), Math.min(outer.height - inner.height, cy + step), 1);
+}
+
+// Smallest mean absolute difference over positions [x0..x1] x [y0..y1]; abandons a position once it can't win.
+function match(outer: Gray, inner: Gray, x0: number, x1: number, y0: number, y1: number, stride: number) {
+  const rowStep = Math.max(stride, Math.floor(inner.height / 200)), colStep = Math.max(stride, Math.floor(inner.width / 300));
+  let samples = 0;
+  for (let y = 0; y < inner.height; y += rowStep) for (let x = 0; x < inner.width; x += colStep) samples++;
+  let best = { x: x0, y: y0, error: Infinity };
+  for (let oy = y0; oy <= y1; oy++) {
+    for (let ox = x0; ox <= x1; ox++) {
+      let sum = 0;
+      const limit = best.error * samples;
+      for (let y = 0; y < inner.height && sum < limit; y += rowStep) {
+        const orow = (oy + y) * outer.width + ox, irow = y * inner.width;
+        for (let x = 0; x < inner.width; x += colStep) sum += Math.abs(outer.data[orow + x] - inner.data[irow + x]);
+      }
+      if (sum < limit) best = { x: ox, y: oy, error: sum / samples };
+    }
+  }
+  return best;
 }
 
 async function load(url: string) {
@@ -78,8 +130,8 @@ function bestOffset(wide: Gray, narrow: Gray, slack: number, overhang: number, f
 // 1px); pixels only one screenshot covers stay clear, since there is nothing to compare them with.
 const REMOVED = [219, 36, 46], ADDED = [26, 184, 77];
 
-async function diffImage(before: ImageBitmap, after: ImageBitmap, beforeX: number, afterX: number) {
-  const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height, after.height);
+async function diffImage(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY, afterX, afterY }: Placement) {
+  const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height + beforeY, after.height + afterY);
   const pixels = (bitmap: ImageBitmap) => {
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     const context = canvas.getContext("2d")!;
@@ -88,9 +140,9 @@ async function diffImage(before: ImageBitmap, after: ImageBitmap, beforeX: numbe
   };
   const b = pixels(before), a = pixels(after);
   const removed = new Float32Array(width * height), added = new Float32Array(width * height);
-  for (let y = 0; y < Math.min(before.height, after.height); y++) {
+  for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
     for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
-      const bi = (y * before.width + x - beforeX) * 4, ai = (y * after.width + x - afterX) * 4;
+      const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
       let lighterAfter = 0, lighterBefore = 0;
       for (let c = 0; c < 3; c++) {
         const d = (a[ai + c] - b[bi + c]) / 255;

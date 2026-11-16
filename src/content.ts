@@ -297,6 +297,8 @@ const ALIGNS: { align: Align; label: string }[] = [
 ];
 const alignListeners = new Set<() => void>();
 
+type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
+
 function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
   let done = false;
   const apply = () => {
@@ -305,18 +307,14 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
     done = true;
     const ratio = aw / bw;
     const near = (a: number, b: number) => Math.abs(a / b - 1) < 0.02;
-    const sameScale = Math.abs(ratio - 1) < 0.01 || DENSITIES.some((d) => near(ratio, d) || near(1 / ratio, d));
-    if (sameScale) {
+    const sameSize = bw === aw && bh === ah;
+    const density = DENSITIES.some((d) => near(ratio, d) || near(1 / ratio, d));
+    if (sameSize || density) {
       frame.style.setProperty("--natural-width", `${aw}px`);
       frame.style.setProperty("--aspect", String(aw / ah));
       return;
     }
-    const wide = Math.max(bw, aw);
-    frame.style.setProperty("--natural-width", `${wide}px`);
-    frame.style.setProperty("--aspect", String(wide / Math.max(bh, ah)));
-    frame.style.setProperty("--before-w", `${(bw / wide) * 100}%`);
-    frame.style.setProperty("--after-w", `${(aw / wide) * 100}%`);
-    root.insertBefore(buildAlignBar(frame, pair, bw, aw), frame.nextSibling);
+    root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah]), frame.nextSibling);
   };
   for (const media of [pair.before, pair.after]) {
     media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
@@ -328,13 +326,25 @@ function naturalSize(media: HTMLImageElement | HTMLVideoElement) {
   return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
 }
 
-function buildAlignBar(frame: HTMLElement, pair: Pair, beforeWidth: number, afterWidth: number) {
-  const wide = Math.max(beforeWidth, afterWidth), slack = Math.abs(beforeWidth - afterWidth);
-  const narrowSide = beforeWidth < afterWidth ? "before" : "after";
+// Lays both screenshots out on a shared canvas at one pixel scale. Positions and sizes are percentages
+// of the canvas width (margin-top percentages are of the width too), so the frame can scale freely.
+function placeOnCanvas(frame: HTMLElement, [bw, bh]: number[], [aw, ah]: number[], p: Placement) {
+  const width = Math.max(p.beforeX + bw, p.afterX + aw), height = Math.max(p.beforeY + bh, p.afterY + ah);
+  const pct = (v: number) => `${(v / width) * 100}%`;
+  frame.style.setProperty("--natural-width", `${width}px`);
+  frame.style.setProperty("--aspect", String(width / height));
+  frame.style.setProperty("--before-w", pct(bw)); frame.style.setProperty("--after-w", pct(aw));
+  frame.style.setProperty("--before-x", pct(p.beforeX)); frame.style.setProperty("--after-x", pct(p.afterX));
+  frame.style.setProperty("--before-y", pct(p.beforeY)); frame.style.setProperty("--after-y", pct(p.afterY));
+}
+
+function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], afterSize: number[]) {
+  const [bw, bh] = beforeSize, [aw, ah] = afterSize;
+  const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
   const images = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
   const bar = el("div", `${PREFIX}-align`);
   const note = el("span", `${PREFIX}-align-note`);
-  note.textContent = `Different widths (before ${beforeWidth}px, after ${afterWidth}px). Line them up by`;
+  note.textContent = `Different sizes (before ${bw} × ${bh}, after ${aw} × ${ah}). Line them up by`;
   const segmented = el("div", `${PREFIX}-segmented`);
   const buttons = ALIGNS.filter(({ align }) => align !== "auto" || images).map(({ align, label }) => {
     const button = el("button", `${PREFIX}-mode`);
@@ -350,11 +360,9 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeWidth: number, afte
   const status = el("span", `${PREFIX}-align-note`);
   bar.append(note, segmented, status);
 
-  const place = (offset: number) => {
-    frame.style.setProperty(`--${narrowSide}-x`, `${(offset / wide) * 100}%`);
-    frame.style.setProperty(`--${narrowSide === "before" ? "after" : "before"}-x`, "0%");
-  };
-  let autoOffset: number | null = null;
+  const placeSideways = (offset: number) => placeOnCanvas(frame, beforeSize, afterSize,
+    beforeNarrow ? { beforeX: offset, beforeY: 0, afterX: 0, afterY: 0 } : { beforeX: 0, beforeY: 0, afterX: offset, afterY: 0 });
+  let autoPlacement: Placement | null = null;
   let autoDiff: string | null = null;
   let shownDiff: string | null = null;
   const showDiff = (url: string | null) => {
@@ -367,12 +375,12 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeWidth: number, afte
     status.textContent = "Lining up…";
     chrome.runtime.sendMessage({ type: "align", before: (pair.before as HTMLImageElement).currentSrc, after: (pair.after as HTMLImageElement).currentSrc }, (response) => {
       status.replaceChildren();
-      if (response?.dx != null) {
-        autoOffset = response.dx; autoDiff = response.diff; waitingForPermission = false;
+      if (response?.placement) {
+        autoPlacement = response.placement; autoDiff = response.diff; waitingForPermission = false;
         sync();
         return;
       }
-      place(slack / 2);
+      placeSideways(slack / 2);
       if (response?.needsPermission) {
         waitingForPermission = true;
         const allow = el("button", `${PREFIX}-expand`);
@@ -395,10 +403,10 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeWidth: number, afte
     for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
     if (current !== "auto") status.replaceChildren();
     showDiff(current === "auto" ? autoDiff : null);
-    if (current === "left") place(0);
-    else if (current === "center") place(slack / 2);
-    else if (current === "right") place(slack);
-    else if (autoOffset != null) place(autoOffset);
+    if (current === "left") placeSideways(0);
+    else if (current === "center") placeSideways(slack / 2);
+    else if (current === "right") placeSideways(slack);
+    else if (autoPlacement) placeOnCanvas(frame, beforeSize, afterSize, autoPlacement);
     else runAuto();
   };
   alignListeners.add(sync);
@@ -650,8 +658,8 @@ function injectStyles() {
 }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
-.${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin-left: var(--before-x, 0%); }
-.${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin-left: var(--after-x, 0%); }
+.${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
+.${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
 .${PREFIX}-align { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
 .${PREFIX}-tag {
   position: absolute; top: 8px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;

@@ -230,18 +230,14 @@
       done = true;
       const ratio = aw / bw;
       const near = (a, b) => Math.abs(a / b - 1) < 0.02;
-      const sameScale = Math.abs(ratio - 1) < 0.01 || DENSITIES.some((d) => near(ratio, d) || near(1 / ratio, d));
-      if (sameScale) {
+      const sameSize = bw === aw && bh === ah;
+      const density = DENSITIES.some((d) => near(ratio, d) || near(1 / ratio, d));
+      if (sameSize || density) {
         frame.style.setProperty("--natural-width", `${aw}px`);
         frame.style.setProperty("--aspect", String(aw / ah));
         return;
       }
-      const wide = Math.max(bw, aw);
-      frame.style.setProperty("--natural-width", `${wide}px`);
-      frame.style.setProperty("--aspect", String(wide / Math.max(bh, ah)));
-      frame.style.setProperty("--before-w", `${bw / wide * 100}%`);
-      frame.style.setProperty("--after-w", `${aw / wide * 100}%`);
-      root.insertBefore(buildAlignBar(frame, pair, bw, aw), frame.nextSibling);
+      root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah]), frame.nextSibling);
     };
     for (const media of [pair.before, pair.after]) {
       media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
@@ -251,13 +247,25 @@
   function naturalSize(media) {
     return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
   }
-  function buildAlignBar(frame, pair, beforeWidth, afterWidth) {
-    const wide = Math.max(beforeWidth, afterWidth), slack = Math.abs(beforeWidth - afterWidth);
-    const narrowSide = beforeWidth < afterWidth ? "before" : "after";
+  function placeOnCanvas(frame, [bw, bh], [aw, ah], p) {
+    const width = Math.max(p.beforeX + bw, p.afterX + aw), height = Math.max(p.beforeY + bh, p.afterY + ah);
+    const pct = (v) => `${v / width * 100}%`;
+    frame.style.setProperty("--natural-width", `${width}px`);
+    frame.style.setProperty("--aspect", String(width / height));
+    frame.style.setProperty("--before-w", pct(bw));
+    frame.style.setProperty("--after-w", pct(aw));
+    frame.style.setProperty("--before-x", pct(p.beforeX));
+    frame.style.setProperty("--after-x", pct(p.afterX));
+    frame.style.setProperty("--before-y", pct(p.beforeY));
+    frame.style.setProperty("--after-y", pct(p.afterY));
+  }
+  function buildAlignBar(frame, pair, beforeSize, afterSize) {
+    const [bw, bh] = beforeSize, [aw, ah] = afterSize;
+    const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
     const images = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
     const bar = el("div", `${PREFIX}-align`);
     const note = el("span", `${PREFIX}-align-note`);
-    note.textContent = `Different widths (before ${beforeWidth}px, after ${afterWidth}px). Line them up by`;
+    note.textContent = `Different sizes (before ${bw} \xD7 ${bh}, after ${aw} \xD7 ${ah}). Line them up by`;
     const segmented = el("div", `${PREFIX}-segmented`);
     const buttons = ALIGNS.filter(({ align }) => align !== "auto" || images).map(({ align, label }) => {
       const button = el("button", `${PREFIX}-mode`);
@@ -275,11 +283,13 @@
     segmented.append(...buttons.map(({ button }) => button));
     const status = el("span", `${PREFIX}-align-note`);
     bar.append(note, segmented, status);
-    const place = (offset) => {
-      frame.style.setProperty(`--${narrowSide}-x`, `${offset / wide * 100}%`);
-      frame.style.setProperty(`--${narrowSide === "before" ? "after" : "before"}-x`, "0%");
-    };
-    let autoOffset = null;
+    const placeSideways = (offset) => placeOnCanvas(
+      frame,
+      beforeSize,
+      afterSize,
+      beforeNarrow ? { beforeX: offset, beforeY: 0, afterX: 0, afterY: 0 } : { beforeX: 0, beforeY: 0, afterX: offset, afterY: 0 }
+    );
+    let autoPlacement = null;
     let autoDiff = null;
     let shownDiff = null;
     const showDiff = (url) => {
@@ -292,14 +302,14 @@
       status.textContent = "Lining up\u2026";
       chrome.runtime.sendMessage({ type: "align", before: pair.before.currentSrc, after: pair.after.currentSrc }, (response) => {
         status.replaceChildren();
-        if (response?.dx != null) {
-          autoOffset = response.dx;
+        if (response?.placement) {
+          autoPlacement = response.placement;
           autoDiff = response.diff;
           waitingForPermission = false;
           sync2();
           return;
         }
-        place(slack / 2);
+        placeSideways(slack / 2);
         if (response?.needsPermission) {
           waitingForPermission = true;
           const allow = el("button", `${PREFIX}-expand`);
@@ -321,10 +331,10 @@
       for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
       if (current !== "auto") status.replaceChildren();
       showDiff(current === "auto" ? autoDiff : null);
-      if (current === "left") place(0);
-      else if (current === "center") place(slack / 2);
-      else if (current === "right") place(slack);
-      else if (autoOffset != null) place(autoOffset);
+      if (current === "left") placeSideways(0);
+      else if (current === "center") placeSideways(slack / 2);
+      else if (current === "right") placeSideways(slack);
+      else if (autoPlacement) placeOnCanvas(frame, beforeSize, afterSize, autoPlacement);
       else runAuto();
     };
     alignListeners.add(sync2);
@@ -528,8 +538,8 @@
 }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
-.${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin-left: var(--before-x, 0%); }
-.${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin-left: var(--after-x, 0%); }
+.${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
+.${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
 .${PREFIX}-align { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
 .${PREFIX}-tag {
   position: absolute; top: 8px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
