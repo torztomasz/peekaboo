@@ -6,14 +6,13 @@
 // Tables are found by header text:
 // | Before | After | (optionally with a label column such as | Viewport | Before | After |).
 
-type Mode = "table" | "flip" | "fade" | "diff";
+type Mode = "table" | "flip" | "diff";
 
 type Pair = { label: string; before: HTMLImageElement | HTMLVideoElement; after: HTMLImageElement | HTMLVideoElement };
 
 const MODES: { mode: Mode; label: string; hint: string }[] = [
   { mode: "table", label: "Side by side", hint: "GitHub's own table" },
   { mode: "flip", label: "Flip", hint: "Click or press Space to blink between before and after" },
-  { mode: "fade", label: "Fade", hint: "Cross-fade: drag the range, or ← → when focused" },
   { mode: "diff", label: "Diff", hint: "Unchanged pixels fade out; red was darker before, green is darker after" },
 ];
 const DEFAULT_MODE: Mode = "flip";
@@ -44,7 +43,7 @@ function main() {
   };
   // GitHub re-renders comment bodies on navigation, edits and previews, so we re-scan on DOM changes.
   new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
-  // Capture phase, so ← → step between pairs before a focused Fade frame nudges its blend.
+  // Capture phase, so full-screen keys win over anything focused on the page.
   document.addEventListener("keydown", handleViewerKeys, true);
   scheduleSync();
 }
@@ -153,14 +152,6 @@ function buildStage(pair: Pair) {
   frame.append(after, before, diff, beforeTag, afterTag);
   const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
 
-  const range = el("input", `${PREFIX}-range`);
-  range.type = "range";
-  range.min = "0";
-  range.max = "100";
-  range.setAttribute("aria-label", "Before ↔ After");
-
-  // On the image rather than under it, so Fade is the same height as the other modes.
-  frame.append(range);
   root.append(frame);
   if (pair.label) {
     const caption = el("figcaption", `${PREFIX}-label`);
@@ -170,16 +161,12 @@ function buildStage(pair: Pair) {
   setNaturalSize(frame, pair.after);
 
   let mode: Mode = DEFAULT_MODE;
-  // Position is "how much of Before shows": 0 = all After, 100 = all Before.
-  let position = 50;
   let showingBefore = true;
 
   function render() {
-    // Blend modes over video need every copy in step; a still-frame diff would mislead, so videos fade instead.
-    const shown = mode === "diff" && !canDiff ? "fade" : mode;
+    // Blend modes over video need every copy in step; a still-frame diff would mislead, so videos flip instead.
+    const shown = mode === "diff" && !canDiff ? "flip" : mode;
     frame.dataset.mode = shown;
-    range.value = String(position);
-    range.hidden = shown !== "fade";
     beforeTag.textContent = shown === "diff" ? "Before only" : "Before";
     afterTag.textContent = shown === "diff" ? "After only" : "After";
     // Both share one grid cell sized to the taller image, so a taller After would peek out below a flipped-in Before.
@@ -187,36 +174,23 @@ function buildStage(pair: Pair) {
     if (shown === "diff") {
       if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
       before.style.opacity = "0";
-    } else if (shown === "fade") {
-      before.style.opacity = String(position / 100);
     } else if (shown === "flip") {
       before.style.opacity = showingBefore ? "1" : "0";
       frame.dataset.showing = showingBefore ? "before" : "after";
     }
   }
 
-  function setPosition(next: number) {
-    position = Math.min(100, Math.max(0, next));
-    render();
-  }
-
-  frame.addEventListener("pointerdown", (event) => {
-    if (mode !== "flip" || event.target === range) return;
+  frame.addEventListener("pointerdown", () => {
+    if (frame.dataset.mode !== "flip") return;
     showingBefore = !showingBefore;
     render();
   });
   frame.addEventListener("keydown", (event) => {
-    if (mode === "flip" && (event.key === " " || event.key === "Enter")) {
-      event.preventDefault();
-      showingBefore = !showingBefore;
-      render();
-    } else if (mode === "fade" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-      event.preventDefault();
-      const step = event.shiftKey ? 1 : 5;
-      setPosition(position + (event.key === "ArrowRight" ? step : -step));
-    }
+    if (frame.dataset.mode !== "flip" || (event.key !== " " && event.key !== "Enter")) return;
+    event.preventDefault();
+    showingBefore = !showingBefore;
+    render();
   });
-  range.addEventListener("input", () => setPosition(Number(range.value)));
 
   return {
     root,
@@ -275,7 +249,7 @@ function ensureDiffFilters() {
 }
 
 // Both sides scale to the same width so screenshots taken at the same viewport line up pixel for pixel.
-function cloneMedia(source: HTMLImageElement | HTMLVideoElement, side: "before" | "after") {
+function cloneMedia(source: HTMLImageElement | HTMLVideoElement, side: "before" | "after" | "diff-part") {
   const media = source.cloneNode(true) as HTMLImageElement | HTMLVideoElement;
   media.removeAttribute("style");
   media.removeAttribute("width");
@@ -330,7 +304,7 @@ function buildPlayButton(stages: ReturnType<typeof buildStage>[]) {
 // ---------- Full screen ----------
 
 // One pair at a time, across every table on the page, so reviewing a PR with many pairs is ← → instead of
-// scrolling. The stage element itself moves into the overlay (keeping its Fade position and Flip side) and goes back to
+// scrolling. The stage element itself moves into the overlay (keeping its Flip side) and goes back to
 // a placeholder when you step away, so there's only ever one copy of each pair.
 const VIEWER_MODES = MODES.filter(({ mode }) => mode !== "table");
 
@@ -519,6 +493,8 @@ function injectStyles() {
   const style = document.createElement("style");
   style.textContent = `
 .${PREFIX} { margin-bottom: 8px; }
+/* Our display rules would otherwise beat the hidden attribute on pages without a global [hidden] reset. */
+.${PREFIX} [hidden] { display: none !important; }
 .${PREFIX}-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .${PREFIX}-segmented { display: inline-flex; border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; overflow: hidden; }
 .${PREFIX}-mode, .${PREFIX}-expand {
@@ -547,10 +523,6 @@ function injectStyles() {
 .${PREFIX}-frame[data-mode="flip"] .${PREFIX}-tag { left: 8px; right: auto; }
 .${PREFIX}-frame[data-mode="flip"][data-showing="before"] .${PREFIX}-tag-after,
 .${PREFIX}-frame[data-mode="flip"][data-showing="after"] .${PREFIX}-tag-before { display: none; }
-.${PREFIX}-range {
-  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); width: min(320px, calc(100% - 24px)); margin: 0;
-  padding: 4px 10px; border-radius: 999px; background: rgb(0 0 0 / 0.45); accent-color: #fff; cursor: pointer;
-}
 .${PREFIX}-diff, .${PREFIX}-diff-layer { grid-area: 1 / 1; display: grid; pointer-events: none; }
 .${PREFIX}-diff-layer { isolation: isolate; opacity: 0.8; }
 .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed); }

@@ -3,7 +3,6 @@
   var MODES = [
     { mode: "table", label: "Side by side", hint: "GitHub's own table" },
     { mode: "flip", label: "Flip", hint: "Click or press Space to blink between before and after" },
-    { mode: "fade", label: "Fade", hint: "Cross-fade: drag the range, or \u2190 \u2192 when focused" },
     { mode: "diff", label: "Diff", hint: "Unchanged pixels fade out; red was darker before, green is darker after" }
   ];
   var DEFAULT_MODE = "flip";
@@ -112,12 +111,6 @@
     const diff = el("div", `${PREFIX}-diff`);
     frame.append(after, before, diff, beforeTag, afterTag);
     const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
-    const range = el("input", `${PREFIX}-range`);
-    range.type = "range";
-    range.min = "0";
-    range.max = "100";
-    range.setAttribute("aria-label", "Before \u2194 After");
-    frame.append(range);
     root.append(frame);
     if (pair.label) {
       const caption = el("figcaption", `${PREFIX}-label`);
@@ -126,47 +119,32 @@
     }
     setNaturalSize(frame, pair.after);
     let mode = DEFAULT_MODE;
-    let position = 50;
     let showingBefore = true;
     function render() {
-      const shown = mode === "diff" && !canDiff ? "fade" : mode;
+      const shown = mode === "diff" && !canDiff ? "flip" : mode;
       frame.dataset.mode = shown;
-      range.value = String(position);
-      range.hidden = shown !== "fade";
       beforeTag.textContent = shown === "diff" ? "Before only" : "Before";
       afterTag.textContent = shown === "diff" ? "After only" : "After";
       after.style.visibility = shown === "flip" && showingBefore ? "hidden" : "visible";
       if (shown === "diff") {
         if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
         before.style.opacity = "0";
-      } else if (shown === "fade") {
-        before.style.opacity = String(position / 100);
       } else if (shown === "flip") {
         before.style.opacity = showingBefore ? "1" : "0";
         frame.dataset.showing = showingBefore ? "before" : "after";
       }
     }
-    function setPosition(next) {
-      position = Math.min(100, Math.max(0, next));
-      render();
-    }
-    frame.addEventListener("pointerdown", (event) => {
-      if (mode !== "flip" || event.target === range) return;
+    frame.addEventListener("pointerdown", () => {
+      if (frame.dataset.mode !== "flip") return;
       showingBefore = !showingBefore;
       render();
     });
     frame.addEventListener("keydown", (event) => {
-      if (mode === "flip" && (event.key === " " || event.key === "Enter")) {
-        event.preventDefault();
-        showingBefore = !showingBefore;
-        render();
-      } else if (mode === "fade" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-        event.preventDefault();
-        const step = event.shiftKey ? 1 : 5;
-        setPosition(position + (event.key === "ArrowRight" ? step : -step));
-      }
+      if (frame.dataset.mode !== "flip" || event.key !== " " && event.key !== "Enter") return;
+      event.preventDefault();
+      showingBefore = !showingBefore;
+      render();
     });
-    range.addEventListener("input", () => setPosition(Number(range.value)));
     return {
       root,
       videos: [before, after].filter((media) => media instanceof HTMLVideoElement),
@@ -401,6 +379,8 @@
     const style = document.createElement("style");
     style.textContent = `
 .${PREFIX} { margin-bottom: 8px; }
+/* Our display rules would otherwise beat the hidden attribute on pages without a global [hidden] reset. */
+.${PREFIX} [hidden] { display: none !important; }
 .${PREFIX}-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .${PREFIX}-segmented { display: inline-flex; border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; overflow: hidden; }
 .${PREFIX}-mode, .${PREFIX}-expand {
@@ -429,10 +409,6 @@
 .${PREFIX}-frame[data-mode="flip"] .${PREFIX}-tag { left: 8px; right: auto; }
 .${PREFIX}-frame[data-mode="flip"][data-showing="before"] .${PREFIX}-tag-after,
 .${PREFIX}-frame[data-mode="flip"][data-showing="after"] .${PREFIX}-tag-before { display: none; }
-.${PREFIX}-range {
-  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); width: min(320px, calc(100% - 24px)); margin: 0;
-  padding: 4px 10px; border-radius: 999px; background: rgb(0 0 0 / 0.45); accent-color: #fff; cursor: pointer;
-}
 .${PREFIX}-diff, .${PREFIX}-diff-layer { grid-area: 1 / 1; display: grid; pointer-events: none; }
 .${PREFIX}-diff-layer { isolation: isolate; opacity: 0.8; }
 .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed); }

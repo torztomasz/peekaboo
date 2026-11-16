@@ -9,7 +9,7 @@ Paste these into the Developer Dashboard (https://chrome.google.com/webstore/dev
 Other extensions are already called just "Peekaboo" (a tab switcher, screen-sharing privacy tools), so the store name carries what it is for.
 
 **Summary** (from manifest description, ≤132 chars):
-Flip, fade or pixel-diff the Before/After screenshots in GitHub pull requests and issues, with a full-screen review mode.
+Flip or pixel-diff the Before/After screenshots in GitHub pull requests and issues, with a full-screen review mode.
 
 **Category**: Developer Tools · **Language**: English
 
@@ -18,9 +18,8 @@ Flip, fade or pixel-diff the Before/After screenshots in GitHub pull requests an
 Review frontend pull requests faster. When a PR or issue on GitHub has a Before | After screenshot table, this extension stacks each pair at the same scale and lets you peek between them so you can see exactly what changed instead of comparing two thumbnails side by side.
 
 • Flip (default): click or press Space to blink between them; anything that changed jumps
-• Fade: cross-fade one into the other, for subtle colour and shadow changes
 • Diff: only changed pixels light up, red where the old version had something, green where the new one does
-• Full screen: one pair at a time, arrow keys step through every pair in the PR, 1–3 switch modes
+• Full screen: one pair at a time, arrow keys step through every pair in the PR, 1–2 switch modes
 • Side by side: GitHub's original table, untouched
 
 Your chosen mode sticks across PRs. Screen recordings get a Play button that starts both videos together.
@@ -31,7 +30,7 @@ No extra permissions, no network requests, no tracking. Open source (MIT): https
 
 **Graphics** (all in this folder):
 - Icon: `../icons/icon-128.png`
-- Screenshots (1280×800): `store-1-flip.png`, `store-2-diff.png`, `store-3-fade.png`, `store-4-fullscreen.png`
+- Screenshots (1280×800): `store-1-flip.png`, `store-2-diff.png`, `store-3-fullscreen.png`
 - Small promo tile (440×280): `promo-small-440x280.png`
 - Marquee (1400×560, optional): `promo-marquee-1400x560.png`
 
@@ -40,7 +39,7 @@ No extra permissions, no network requests, no tracking. Open source (MIT): https
 
 ## Privacy practices
 
-**Single purpose**: Displays the Before/After screenshot tables in GitHub pull requests and issues as an interactive comparison (flip, fade, diff).
+**Single purpose**: Displays the Before/After screenshot tables in GitHub pull requests and issues as an interactive comparison (flip, diff).
 
 **Permission justification**
 - Host access to https://github.com/* (content script): the extension only works on GitHub pull request and issue pages, where it finds Before/After screenshot tables and renders the comparison next to them. It requests no other permissions.

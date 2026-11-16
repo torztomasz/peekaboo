@@ -4,21 +4,20 @@
 
 <h1 align="center">Peekaboo</h1>
 
-<p align="center">Flip, fade or diff the Before/After screenshots in GitHub pull requests.</p>
+<p align="center">Flip or diff the Before/After screenshots in GitHub pull requests.</p>
 
 A Chrome extension for reviewing frontend pull requests. It turns the `| Before | After |` screenshot
-tables in GitHub PRs and issues into one image you can **flip**, **fade** or **diff**, instead of squinting
+tables in GitHub PRs and issues into one image you can **flip** or **diff**, instead of squinting
 at two thumbnails side by side.
 
-![Flipping between two versions of an invoices page, fading between them, then Diff showing a removed nav link in red and restyled status pills in green](docs/demo.gif)
+![Starting from GitHub's side-by-side table, clicking Flip, flipping between two versions of an invoices page, then Diff showing a removed nav link in red and restyled status pills in green](docs/demo.gif)
 
 ## What it does
 
 - **Flip** (default): click or press Space to blink between before and after. Anything that changed jumps.
-- **Fade**: cross-fade one into the other, for subtle colour and shadow changes.
 - **Diff**: only changed pixels light up, red where Before had something, green where After does.
 - **Side by side**: GitHub's own table, which is never modified, only hidden.
-- **Full screen**: one pair at a time, ← → through every pair in the PR, 1–3 to switch modes, Esc to close.
+- **Full screen**: one pair at a time, ← → through every pair in the PR, 1–2 to switch modes, Esc to close.
 
 Your chosen mode sticks across tables and PRs. Recordings (videos) get a Play button that starts both in
 step.
