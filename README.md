@@ -75,6 +75,34 @@ opacity grows with the difference, dilated 1px so hairline changes stay visible.
 No permissions beyond running on `github.com`, no network requests, no analytics. The only thing stored
 is your last chosen mode, in the page's `localStorage`. See [PRIVACY.md](PRIVACY.md).
 
+## Build it yourself
+
+Rather not install someone else's extension? Paste this into Claude Code, Codex or any coding agent. It
+describes the behaviour, not this code, so you get your own version written from scratch. Then load its
+folder with **Load unpacked** as above.
+
+```text
+Build a Chrome extension (Manifest V3, no permissions, plain TypeScript bundled with esbuild into one content script) that makes before/after screenshots in GitHub pull requests and issues easier to review.
+
+What it should find:
+- Any table inside a rendered GitHub comment (.markdown-body table) whose header row has a column starting with "Before" and one starting with "After". Each body row with an image (or video) in both of those cells is one pair. Text in any other column of the row (for example "375px" or "Dark") becomes that pair's label.
+- If the paragraph right after the table is a single italic line, treat it as the caption for the whole table. GitHub wraps tables in a custom element, so look for the caption next to that wrapper, not next to the table.
+- GitHub is a single-page app and re-renders comments on navigation, edits and previews. Watch the DOM with a MutationObserver (batched with requestAnimationFrame) and process each table only once.
+
+What it should show:
+- Above each matching table, a toolbar with modes: Side by side (GitHub's original table, left untouched in the DOM and only hidden), Flip and Diff, plus a "Full screen" button. Both images are stacked at the same width.
+- Flip (the default): click or press Space to switch between Before and After, with a label showing which one is on screen.
+- Diff: highlight only the pixels that changed, red where Before had something and green where After does. GitHub serves uploaded images without CORS headers, so canvas pixel reads won't work. Do it in the compositor instead: in an isolated group, stack the image, the other image with mix-blend-mode: lighten, then the first image again with mix-blend-mode: difference. That leaves max(0, other - this) per channel. Colour it with an SVG feColorMatrix filter whose alpha rises with the difference (ignore anti-aliasing noise) and dilate it 1px so hairline changes stay visible. For videos, fall back to Flip.
+- Never upscale small screenshots inline: cap the comparison at the image's natural width.
+- The chosen mode is one preference saved in localStorage and applied to every table on every page. Keep the clicked toolbar at the same place on screen when other tables above it change height.
+- Full screen: an overlay showing one pair at a time, as large as fits with its caption underneath. Left/right arrows step through every pair on the page across all tables, keys 1 and 2 switch modes, Esc closes and scrolls back to the pair you were on. Move the existing stage element into the overlay and back instead of cloning it, so the Flip side carries over.
+- If a table has videos, add a Play button that restarts both videos together. Mute and loop them.
+- Hide things with the hidden attribute, and scope a [hidden] { display: none !important } rule to your own widget: GitHub's global reset does that for you on github.com, but your own display rules would otherwise beat the attribute anywhere it's missing.
+- Style it with GitHub's own CSS variables (--bgColor-default, --fgColor-default, --borderColor-default and so on, with fallbacks) so it fits light and dark themes.
+
+Done when: on a PR with a | Before | After | table, every mode works, the original table comes back on Side by side, full screen steps through all pairs, and the extension requests no permissions beyond its content script on https://github.com/*. Include a README with Load unpacked instructions.
+```
+
 ## Develop
 
 ```sh
