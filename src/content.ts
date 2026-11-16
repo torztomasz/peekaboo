@@ -1,27 +1,25 @@
 // Reviewing a side-by-side table means eyeballing two shrunken images across a gap; small shifts (padding,
-// colour, a 1px border) disappear. Overlaying the two at the same scale and wiping or blinking between them
-// makes the difference move, which the eye catches. The original table stays in the DOM (hidden), so
+// colour, a 1px border) disappear. Overlaying the two at the same scale and blinking between them makes the
+// difference jump, which the eye catches, so Flip is the default. The original table stays in the DOM (hidden), so
 // "Side by side" is always the untouched GitHub rendering.
 //
 // Tables are found by header text:
 // | Before | After | (optionally with a label column such as | Viewport | Before | After |).
 
-type Mode = "table" | "slider" | "fade" | "flip" | "diff";
+type Mode = "table" | "flip" | "fade" | "diff";
 
 type Pair = { label: string; before: HTMLImageElement | HTMLVideoElement; after: HTMLImageElement | HTMLVideoElement };
 
 const MODES: { mode: Mode; label: string; hint: string }[] = [
   { mode: "table", label: "Side by side", hint: "GitHub's own table" },
-  { mode: "slider", label: "Slider", hint: "Drag across the image, or ← → when focused" },
-  { mode: "fade", label: "Fade", hint: "Cross-fade: drag the range, or ← → when focused" },
   { mode: "flip", label: "Flip", hint: "Click or press Space to blink between before and after" },
+  { mode: "fade", label: "Fade", hint: "Cross-fade: drag the range, or ← → when focused" },
   { mode: "diff", label: "Diff", hint: "Unchanged pixels fade out; red was darker before, green is darker after" },
 ];
-// Names match the Ardia userscript this was ported from, so with both installed a table is only processed
-// once (the marker lives on the shared DOM) and the mode preference is shared.
-const MODE_KEY = "ardia-before-after-mode";
-const PROCESSED = "ardiaCompare";
-const PREFIX = "ardia-ba";
+const DEFAULT_MODE: Mode = "flip";
+const MODE_KEY = "peekaboo-mode";
+const PROCESSED = "peekaboo";
+const PREFIX = "peekaboo";
 // Every widget on the page, so a mode picked on one table applies to all of them, and the full-screen
 // viewer can step through every pair on the page, not just one table's.
 const widgets = new Set<Widget>();
@@ -46,7 +44,7 @@ function main() {
   };
   // GitHub re-renders comment bodies on navigation, edits and previews, so we re-scan on DOM changes.
   new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
-  // Capture phase, so ← → step between pairs before a focused slider frame nudges its divider.
+  // Capture phase, so ← → step between pairs before a focused Fade frame nudges its blend.
   document.addEventListener("keydown", handleViewerKeys, true);
   scheduleSync();
 }
@@ -149,11 +147,10 @@ function buildStage(pair: Pair) {
   frame.tabIndex = 0;
   const after = cloneMedia(pair.after, "after");
   const before = cloneMedia(pair.before, "before");
-  const divider = el("div", `${PREFIX}-divider`);
   const beforeTag = tag("Before", "before");
   const afterTag = tag("After", "after");
   const diff = el("div", `${PREFIX}-diff`);
-  frame.append(after, before, diff, divider, beforeTag, afterTag);
+  frame.append(after, before, diff, beforeTag, afterTag);
   const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
 
   const range = el("input", `${PREFIX}-range`);
@@ -172,7 +169,7 @@ function buildStage(pair: Pair) {
   }
   setNaturalSize(frame, pair.after);
 
-  let mode: Mode = "slider";
+  let mode: Mode = DEFAULT_MODE;
   // Position is "how much of Before shows": 0 = all After, 100 = all Before.
   let position = 50;
   let showingBefore = true;
@@ -189,17 +186,10 @@ function buildStage(pair: Pair) {
     after.style.visibility = shown === "flip" && showingBefore ? "hidden" : "visible";
     if (shown === "diff") {
       if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
-      before.style.clipPath = "none";
       before.style.opacity = "0";
-    } else if (shown === "slider") {
-      before.style.clipPath = `inset(0 ${100 - position}% 0 0)`;
-      before.style.opacity = "1";
-      divider.style.left = `${position}%`;
     } else if (shown === "fade") {
-      before.style.clipPath = "none";
       before.style.opacity = String(position / 100);
     } else if (shown === "flip") {
-      before.style.clipPath = "none";
       before.style.opacity = showingBefore ? "1" : "0";
       frame.dataset.showing = showingBefore ? "before" : "after";
     }
@@ -210,31 +200,17 @@ function buildStage(pair: Pair) {
     render();
   }
 
-  function positionFromPointer(event: PointerEvent) {
-    const box = frame.getBoundingClientRect();
-    setPosition(((event.clientX - box.left) / box.width) * 100);
-  }
-
   frame.addEventListener("pointerdown", (event) => {
-    if (mode === "flip") {
-      showingBefore = !showingBefore;
-      render();
-      return;
-    }
-    if (mode !== "slider") return;
-    event.preventDefault();
-    frame.setPointerCapture(event.pointerId);
-    positionFromPointer(event);
-  });
-  frame.addEventListener("pointermove", (event) => {
-    if (mode === "slider" && frame.hasPointerCapture(event.pointerId)) positionFromPointer(event);
+    if (mode !== "flip" || event.target === range) return;
+    showingBefore = !showingBefore;
+    render();
   });
   frame.addEventListener("keydown", (event) => {
     if (mode === "flip" && (event.key === " " || event.key === "Enter")) {
       event.preventDefault();
       showingBefore = !showingBefore;
       render();
-    } else if (mode !== "flip" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    } else if (mode === "fade" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
       event.preventDefault();
       const step = event.shiftKey ? 1 : 5;
       setPosition(position + (event.key === "ArrowRight" ? step : -step));
@@ -354,7 +330,7 @@ function buildPlayButton(stages: ReturnType<typeof buildStage>[]) {
 // ---------- Full screen ----------
 
 // One pair at a time, across every table on the page, so reviewing a PR with many pairs is ← → instead of
-// scrolling. The stage element itself moves into the overlay (keeping its slider position) and goes back to
+// scrolling. The stage element itself moves into the overlay (keeping its Fade position and Flip side) and goes back to
 // a placeholder when you step away, so there's only ever one copy of each pair.
 const VIEWER_MODES = MODES.filter(({ mode }) => mode !== "table");
 
@@ -406,8 +382,8 @@ function openViewer(start: Slide) {
   document.body.append(overlay);
   document.documentElement.classList.add(`${PREFIX}-locked`);
 
-  viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("ardia-ba") };
-  if (loadMode() === "table") setModeEverywhere("slider");
+  viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("peekaboo") };
+  if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
   syncViewerModes();
   showSlide(Math.max(0, slides.indexOf(start)));
 }
@@ -508,7 +484,7 @@ function loadMode(): Mode {
     const saved = localStorage.getItem(MODE_KEY);
     if (MODES.some(({ mode }) => mode === saved)) return saved as Mode;
   } catch {}
-  return "slider";
+  return DEFAULT_MODE;
 }
 
 // One preference for every table on every page, so switching to Flip once sticks while reviewing.
@@ -560,16 +536,8 @@ function injectStyles() {
   border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; overflow: hidden;
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
-.${PREFIX}-frame[data-mode="slider"] { cursor: ew-resize; }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; }
-.${PREFIX}-divider { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35); pointer-events: none; }
-.${PREFIX}-divider::after {
-  content: "◂ ▸"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  font-size: 11px; letter-spacing: -1px; white-space: nowrap; padding: 4px 6px; border-radius: 999px;
-  background: #fff; color: #1f2328; box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
-}
-.${PREFIX}-frame:not([data-mode="slider"]) .${PREFIX}-divider { display: none; }
 .${PREFIX}-tag {
   position: absolute; top: 8px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
   background: rgb(0 0 0 / 0.65); color: #fff; pointer-events: none;
@@ -589,7 +557,6 @@ function injectStyles() {
 .${PREFIX}-diff-added { filter: url(#${PREFIX}-added); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1); opacity: 0.25; }
-.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-divider { display: none; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }

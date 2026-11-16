@@ -1,19 +1,18 @@
-# Before/After Compare
+# Peekaboo
 
 A Chrome extension for reviewing frontend pull requests. It turns the `| Before | After |` screenshot
-tables in GitHub PRs and issues into one comparison you can **slide**, **fade**, **flip** or **diff**,
-instead of squinting at two thumbnails side by side.
+tables in GitHub PRs and issues into one image you can **flip**, **fade** or **diff**, instead of squinting
+at two thumbnails side by side.
 
-![Dragging the slider across a settings card, flipping between versions, then the red/green diff](docs/demo.gif)
+![Flipping between the old and new version of a settings card, then the red/green diff](docs/demo.gif)
 
 ## What it does
 
-- **Slider**: drag a divider across the two screenshots, stacked at the same scale.
-- **Fade**: cross-fade one into the other.
-- **Flip**: click or press Space to blink between them; anything that moved jumps.
+- **Flip** (default): click or press Space to blink between before and after. Anything that changed jumps.
+- **Fade**: cross-fade one into the other, for subtle colour and shadow changes.
 - **Diff**: only changed pixels light up, red where Before had something, green where After does.
-- **Full screen**: one pair at a time, ← → through every pair in the PR, 1–4 to switch modes, Esc to close.
-- **Side by side** brings back GitHub's own table, which is never modified, only hidden.
+- **Side by side**: GitHub's own table, which is never modified, only hidden.
+- **Full screen**: one pair at a time, ← → through every pair in the PR, 1–3 to switch modes, Esc to close.
 
 Your chosen mode sticks across tables and PRs. Recordings (videos) get a Play button that starts both in
 step.
@@ -36,9 +35,9 @@ _Save button overflowed the toolbar on 375px screens; it now wraps below the tit
 
 From a [release](../../releases) zip, until the Chrome Web Store listing is live:
 
-1. Download and unzip `before-after-compare-<version>.zip`; keep the folder somewhere permanent.
+1. Download and unzip `peekaboo-<version>.zip`; keep the folder somewhere permanent.
 2. Open `chrome://extensions`, turn on **Developer mode** (top right).
-3. **Load unpacked** → pick the `before-after-compare` folder. Refresh any open GitHub tabs.
+3. **Load unpacked** → pick the `peekaboo` folder. Refresh any open GitHub tabs.
 
 Works in Chrome, Edge, Brave, Arc and other Chromium browsers.
 
@@ -59,7 +58,7 @@ is your last chosen mode, in the page's `localStorage`. See [PRIVACY.md](PRIVACY
 ```sh
 npm install
 npm run build     # or: npm run watch
-npm run package   # → release/before-after-compare-<version>.zip
+npm run package   # → release/peekaboo-<version>.zip
 ```
 
 Reload the extension on `chrome://extensions` and refresh the GitHub tab after a build. Bump `version` in

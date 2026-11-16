@@ -2,14 +2,14 @@
   // src/content.ts
   var MODES = [
     { mode: "table", label: "Side by side", hint: "GitHub's own table" },
-    { mode: "slider", label: "Slider", hint: "Drag across the image, or \u2190 \u2192 when focused" },
-    { mode: "fade", label: "Fade", hint: "Cross-fade: drag the range, or \u2190 \u2192 when focused" },
     { mode: "flip", label: "Flip", hint: "Click or press Space to blink between before and after" },
+    { mode: "fade", label: "Fade", hint: "Cross-fade: drag the range, or \u2190 \u2192 when focused" },
     { mode: "diff", label: "Diff", hint: "Unchanged pixels fade out; red was darker before, green is darker after" }
   ];
-  var MODE_KEY = "ardia-before-after-mode";
-  var PROCESSED = "ardiaCompare";
-  var PREFIX = "ardia-ba";
+  var DEFAULT_MODE = "flip";
+  var MODE_KEY = "peekaboo-mode";
+  var PROCESSED = "peekaboo";
+  var PREFIX = "peekaboo";
   var widgets = /* @__PURE__ */ new Set();
   main();
   function main() {
@@ -107,11 +107,10 @@
     frame.tabIndex = 0;
     const after = cloneMedia(pair.after, "after");
     const before = cloneMedia(pair.before, "before");
-    const divider = el("div", `${PREFIX}-divider`);
     const beforeTag = tag("Before", "before");
     const afterTag = tag("After", "after");
     const diff = el("div", `${PREFIX}-diff`);
-    frame.append(after, before, diff, divider, beforeTag, afterTag);
+    frame.append(after, before, diff, beforeTag, afterTag);
     const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
     const range = el("input", `${PREFIX}-range`);
     range.type = "range";
@@ -126,7 +125,7 @@
       root.append(caption);
     }
     setNaturalSize(frame, pair.after);
-    let mode = "slider";
+    let mode = DEFAULT_MODE;
     let position = 50;
     let showingBefore = true;
     function render() {
@@ -139,17 +138,10 @@
       after.style.visibility = shown === "flip" && showingBefore ? "hidden" : "visible";
       if (shown === "diff") {
         if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
-        before.style.clipPath = "none";
         before.style.opacity = "0";
-      } else if (shown === "slider") {
-        before.style.clipPath = `inset(0 ${100 - position}% 0 0)`;
-        before.style.opacity = "1";
-        divider.style.left = `${position}%`;
       } else if (shown === "fade") {
-        before.style.clipPath = "none";
         before.style.opacity = String(position / 100);
       } else if (shown === "flip") {
-        before.style.clipPath = "none";
         before.style.opacity = showingBefore ? "1" : "0";
         frame.dataset.showing = showingBefore ? "before" : "after";
       }
@@ -158,30 +150,17 @@
       position = Math.min(100, Math.max(0, next));
       render();
     }
-    function positionFromPointer(event) {
-      const box = frame.getBoundingClientRect();
-      setPosition((event.clientX - box.left) / box.width * 100);
-    }
     frame.addEventListener("pointerdown", (event) => {
-      if (mode === "flip") {
-        showingBefore = !showingBefore;
-        render();
-        return;
-      }
-      if (mode !== "slider") return;
-      event.preventDefault();
-      frame.setPointerCapture(event.pointerId);
-      positionFromPointer(event);
-    });
-    frame.addEventListener("pointermove", (event) => {
-      if (mode === "slider" && frame.hasPointerCapture(event.pointerId)) positionFromPointer(event);
+      if (mode !== "flip" || event.target === range) return;
+      showingBefore = !showingBefore;
+      render();
     });
     frame.addEventListener("keydown", (event) => {
       if (mode === "flip" && (event.key === " " || event.key === "Enter")) {
         event.preventDefault();
         showingBefore = !showingBefore;
         render();
-      } else if (mode !== "flip" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      } else if (mode === "fade" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
         event.preventDefault();
         const step = event.shiftKey ? 1 : 5;
         setPosition(position + (event.key === "ArrowRight" ? step : -step));
@@ -310,8 +289,8 @@
     overlay.append(bar, title, body);
     document.body.append(overlay);
     document.documentElement.classList.add(`${PREFIX}-locked`);
-    viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("ardia-ba") };
-    if (loadMode() === "table") setModeEverywhere("slider");
+    viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("peekaboo") };
+    if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
     syncViewerModes();
     showSlide(Math.max(0, slides.indexOf(start)));
   }
@@ -393,7 +372,7 @@
       if (MODES.some(({ mode }) => mode === saved)) return saved;
     } catch {
     }
-    return "slider";
+    return DEFAULT_MODE;
   }
   function setModeEverywhere(mode, anchor) {
     const topBefore = anchor?.getBoundingClientRect().top;
@@ -439,16 +418,8 @@
   border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; overflow: hidden;
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
-.${PREFIX}-frame[data-mode="slider"] { cursor: ew-resize; }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; }
-.${PREFIX}-divider { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35); pointer-events: none; }
-.${PREFIX}-divider::after {
-  content: "\u25C2 \u25B8"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  font-size: 11px; letter-spacing: -1px; white-space: nowrap; padding: 4px 6px; border-radius: 999px;
-  background: #fff; color: #1f2328; box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
-}
-.${PREFIX}-frame:not([data-mode="slider"]) .${PREFIX}-divider { display: none; }
 .${PREFIX}-tag {
   position: absolute; top: 8px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
   background: rgb(0 0 0 / 0.65); color: #fff; pointer-events: none;
@@ -468,7 +439,6 @@
 .${PREFIX}-diff-added { filter: url(#${PREFIX}-added); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1); opacity: 0.25; }
-.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-divider { display: none; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }
