@@ -2,6 +2,41 @@
   // src/origins.ts
   var IMAGE_ORIGINS = ["https://private-user-images.githubusercontent.com/*", "https://user-images.githubusercontent.com/*"];
 
+  // src/match.ts
+  var FULL_SIZE_ROWS = 4e3;
+  function locate(outer, inner, gray2) {
+    let scale = Math.min(1, 240 / Math.max(outer.width, outer.height));
+    scale = Math.min(1, Math.max(scale, 24 / Math.min(inner.width, inner.height)));
+    const o = gray2(outer, scale, 0, outer.height), i = gray2(inner, scale, 0, inner.height);
+    const coarse = match(o, i, 0, o.width - i.width, 0, o.height - i.height, 1);
+    const step = Math.ceil(1 / scale) + 1;
+    const xMax = outer.width - inner.width, yMax = outer.height - inner.height;
+    const cx = Math.min(xMax, Math.round(coarse.x / scale)), cy = Math.min(yMax, Math.round(coarse.y / scale));
+    const template = gray2(inner, 1, 0, Math.min(inner.height, FULL_SIZE_ROWS));
+    const top = Math.max(0, cy - step), last = Math.min(yMax, cy + step);
+    const band = gray2(outer, 1, top, last + template.height);
+    const exact = match(band, template, Math.max(0, cx - step), Math.min(band.width - template.width, cx + step), 0, band.height - template.height, 1);
+    return { ...exact, y: exact.y + top };
+  }
+  function match(outer, inner, x0, x1, y0, y1, stride) {
+    const rowStep = Math.max(stride, Math.floor(inner.height / 200)), colStep = Math.max(stride, Math.floor(inner.width / 300));
+    let samples = 0;
+    for (let y = 0; y < inner.height; y += rowStep) for (let x = 0; x < inner.width; x += colStep) samples++;
+    let best = { x: x0, y: y0, error: Infinity };
+    for (let oy = y0; oy <= y1; oy++) {
+      for (let ox = x0; ox <= x1; ox++) {
+        let sum = 0;
+        const limit = best.error * samples;
+        for (let y = 0; y < inner.height && sum < limit; y += rowStep) {
+          const orow = (oy + y) * outer.width + ox, irow = y * inner.width;
+          for (let x = 0; x < inner.width; x += colStep) sum += Math.abs(outer.data[orow + x] - inner.data[irow + x]);
+        }
+        if (sum < limit) best = { x: ox, y: oy, error: sum / samples };
+      }
+    }
+    return best;
+  }
+
   // src/background.ts
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     if (message?.type === "align") {
@@ -30,7 +65,7 @@
     let placement = null;
     if (fits(b, a) || fits(a, b)) {
       const beforeOutside = fits(b, a);
-      const found = locate(beforeOutside ? b : a, beforeOutside ? a : b);
+      const found = locate(beforeOutside ? b : a, beforeOutside ? a : b, gray);
       if (found.error <= CONTAINED_MAX_ERROR) {
         placement = beforeOutside ? { beforeX: 0, beforeY: 0, afterX: found.x, afterY: found.y } : { beforeX: found.x, beforeY: found.y, afterX: 0, afterY: 0 };
       }
@@ -49,44 +84,17 @@
     const step = Math.ceil(1 / scale) + 1;
     return bestOffset(gray(wide, 1), gray(narrow, 1), slack, 0, Math.round(coarse / scale) - step, Math.round(coarse / scale) + step);
   }
-  function locate(outer, inner) {
-    let scale = Math.min(1, 240 / Math.max(outer.width, outer.height));
-    scale = Math.min(1, Math.max(scale, 24 / Math.min(inner.width, inner.height)));
-    const coarse = match(gray(outer, scale), gray(inner, scale), 0, Math.round((outer.width - inner.width) * scale), 0, Math.round((outer.height - inner.height) * scale), 1);
-    const step = Math.ceil(1 / scale) + 1;
-    const cx = Math.round(coarse.x / scale), cy = Math.round(coarse.y / scale);
-    const o = gray(outer, 1), i = gray(inner, 1);
-    return match(o, i, Math.max(0, cx - step), Math.min(outer.width - inner.width, cx + step), Math.max(0, cy - step), Math.min(outer.height - inner.height, cy + step), 1);
-  }
-  function match(outer, inner, x0, x1, y0, y1, stride) {
-    const rowStep = Math.max(stride, Math.floor(inner.height / 200)), colStep = Math.max(stride, Math.floor(inner.width / 300));
-    let samples = 0;
-    for (let y = 0; y < inner.height; y += rowStep) for (let x = 0; x < inner.width; x += colStep) samples++;
-    let best = { x: x0, y: y0, error: Infinity };
-    for (let oy = y0; oy <= y1; oy++) {
-      for (let ox = x0; ox <= x1; ox++) {
-        let sum = 0;
-        const limit = best.error * samples;
-        for (let y = 0; y < inner.height && sum < limit; y += rowStep) {
-          const orow = (oy + y) * outer.width + ox, irow = y * inner.width;
-          for (let x = 0; x < inner.width; x += colStep) sum += Math.abs(outer.data[orow + x] - inner.data[irow + x]);
-        }
-        if (sum < limit) best = { x: ox, y: oy, error: sum / samples };
-      }
-    }
-    return best;
-  }
   async function load(url) {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`image ${response.status}`);
     return createImageBitmap(await response.blob());
   }
-  function gray(bitmap, scale) {
+  function gray(bitmap, scale, top = 0, bottom = Math.min(bitmap.height, FULL_SIZE_ROWS)) {
     const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(Math.min(bitmap.height, 4e3) * scale));
+    const height = Math.max(1, Math.round((bottom - top) * scale));
     const canvas = new OffscreenCanvas(width, height);
     const context = canvas.getContext("2d");
-    context.drawImage(bitmap, 0, 0, bitmap.width, Math.min(bitmap.height, 4e3), 0, 0, width, height);
+    context.drawImage(bitmap, 0, top, bitmap.width, bottom - top, 0, 0, width, height);
     const rgba = context.getImageData(0, 0, width, height).data;
     const data = new Float32Array(width * height);
     for (let i = 0; i < data.length; i++) data[i] = rgba[i * 4] * 0.299 + rgba[i * 4 + 1] * 0.587 + rgba[i * 4 + 2] * 0.114;

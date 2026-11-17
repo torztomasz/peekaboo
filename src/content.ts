@@ -45,6 +45,10 @@ function main() {
   new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
   // Capture phase, so full-screen keys win over anything focused on the page.
   document.addEventListener("keydown", handleViewerKeys, true);
+  // Back from the options page with the permission granted: bars waiting for it try again.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") eachAlignBar((bar) => bar.retryAuto());
+  });
   scheduleSync();
 }
 
@@ -295,7 +299,17 @@ const ALIGNS: { align: Align; label: string }[] = [
   { align: "center", label: "Center" },
   { align: "right", label: "Right" },
 ];
-const alignListeners = new Set<() => void>();
+type AlignBar = { sync: () => void; retryAuto: () => void };
+// Every align bar, keyed by its frame, so an alignment picked on one applies to all. GitHub changes pages
+// without reloading, so a bar whose frame has left the page is dropped instead of run.
+const alignBars = new Map<HTMLElement, AlignBar>();
+
+function eachAlignBar(action: (bar: AlignBar) => void) {
+  for (const [frame, bar] of alignBars) {
+    if (frame.isConnected) action(bar);
+    else alignBars.delete(frame);
+  }
+}
 
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
 
@@ -375,7 +389,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     button.textContent = label;
     button.addEventListener("click", () => {
       try { localStorage.setItem(ALIGN_KEY, align); } catch {}
-      for (const listener of alignListeners) listener();
+      eachAlignBar((bar) => bar.sync());
     });
     return { align, button };
   });
@@ -417,10 +431,9 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
       }
     });
   };
-  // Back from the options page with the permission granted: try again.
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && waitingForPermission && loadAlign() === "auto") runAuto();
-  });
+  const retryAuto = () => {
+    if (waitingForPermission && loadAlign() === "auto") runAuto();
+  };
   const sync = () => {
     let current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
     if (found && current !== "auto") current = "left";
@@ -433,7 +446,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     else if (autoPlacement) placeOnCanvas(frame, beforeSize, afterSize, autoPlacement);
     else runAuto();
   };
-  alignListeners.add(sync);
+  alignBars.set(frame, { sync, retryAuto });
   sync();
   return bar;
 }

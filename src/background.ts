@@ -3,6 +3,7 @@
 // for the image host is optional, asked for on the options page the first time someone picks Auto.
 
 import { IMAGE_ORIGINS } from "./origins";
+import { FULL_SIZE_ROWS, type Gray, locate } from "./match";
 
 type AlignRequest = { type: "align"; before: string; after: string };
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
@@ -44,7 +45,7 @@ async function findOffset({ before, after }: AlignRequest): Promise<AlignRespons
   let placement: Placement | null = null;
   if (fits(b, a) || fits(a, b)) {
     const beforeOutside = fits(b, a);
-    const found = locate(beforeOutside ? b : a, beforeOutside ? a : b);
+    const found = locate(beforeOutside ? b : a, beforeOutside ? a : b, gray);
     if (found.error <= CONTAINED_MAX_ERROR) {
       placement = beforeOutside ? { beforeX: 0, beforeY: 0, afterX: found.x, afterY: found.y } : { beforeX: found.x, beforeY: found.y, afterX: 0, afterY: 0 };
     }
@@ -67,51 +68,18 @@ function slideSideways(wide: ImageBitmap, narrow: ImageBitmap) {
   return bestOffset(gray(wide, 1), gray(narrow, 1), slack, 0, Math.round(coarse / scale) - step, Math.round(coarse / scale) + step);
 }
 
-// Template match of `inner` inside `outer`: every position on a shrunk copy, then exact around the best.
-function locate(outer: ImageBitmap, inner: ImageBitmap) {
-  let scale = Math.min(1, 240 / Math.max(outer.width, outer.height));
-  scale = Math.min(1, Math.max(scale, 24 / Math.min(inner.width, inner.height)));
-  const coarse = match(gray(outer, scale), gray(inner, scale), 0, Math.round((outer.width - inner.width) * scale), 0, Math.round((outer.height - inner.height) * scale), 1);
-  const step = Math.ceil(1 / scale) + 1;
-  const cx = Math.round(coarse.x / scale), cy = Math.round(coarse.y / scale);
-  const o = gray(outer, 1), i = gray(inner, 1);
-  return match(o, i, Math.max(0, cx - step), Math.min(outer.width - inner.width, cx + step), Math.max(0, cy - step), Math.min(outer.height - inner.height, cy + step), 1);
-}
-
-// Smallest mean absolute difference over positions [x0..x1] x [y0..y1]; abandons a position once it can't win.
-function match(outer: Gray, inner: Gray, x0: number, x1: number, y0: number, y1: number, stride: number) {
-  const rowStep = Math.max(stride, Math.floor(inner.height / 200)), colStep = Math.max(stride, Math.floor(inner.width / 300));
-  let samples = 0;
-  for (let y = 0; y < inner.height; y += rowStep) for (let x = 0; x < inner.width; x += colStep) samples++;
-  let best = { x: x0, y: y0, error: Infinity };
-  for (let oy = y0; oy <= y1; oy++) {
-    for (let ox = x0; ox <= x1; ox++) {
-      let sum = 0;
-      const limit = best.error * samples;
-      for (let y = 0; y < inner.height && sum < limit; y += rowStep) {
-        const orow = (oy + y) * outer.width + ox, irow = y * inner.width;
-        for (let x = 0; x < inner.width; x += colStep) sum += Math.abs(outer.data[orow + x] - inner.data[irow + x]);
-      }
-      if (sum < limit) best = { x: ox, y: oy, error: sum / samples };
-    }
-  }
-  return best;
-}
-
 async function load(url: string) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`image ${response.status}`);
   return createImageBitmap(await response.blob());
 }
 
-type Gray = { data: Float32Array; width: number; height: number };
-
-function gray(bitmap: ImageBitmap, scale: number): Gray {
+function gray(bitmap: ImageBitmap, scale: number, top = 0, bottom = Math.min(bitmap.height, FULL_SIZE_ROWS)): Gray {
   const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(Math.min(bitmap.height, 4000) * scale));
+  const height = Math.max(1, Math.round((bottom - top) * scale));
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext("2d")!;
-  context.drawImage(bitmap, 0, 0, bitmap.width, Math.min(bitmap.height, 4000), 0, 0, width, height);
+  context.drawImage(bitmap, 0, top, bitmap.width, bottom - top, 0, 0, width, height);
   const rgba = context.getImageData(0, 0, width, height).data;
   const data = new Float32Array(width * height);
   for (let i = 0; i < data.length; i++) data[i] = rgba[i * 4] * 0.299 + rgba[i * 4 + 1] * 0.587 + rgba[i * 4 + 2] * 0.114;

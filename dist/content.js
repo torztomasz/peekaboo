@@ -24,6 +24,9 @@
     };
     new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
     document.addEventListener("keydown", handleViewerKeys, true);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") eachAlignBar((bar) => bar.retryAuto());
+    });
     scheduleSync();
   }
   function sync() {
@@ -221,7 +224,13 @@
     { align: "center", label: "Center" },
     { align: "right", label: "Right" }
   ];
-  var alignListeners = /* @__PURE__ */ new Set();
+  var alignBars = /* @__PURE__ */ new Map();
+  function eachAlignBar(action) {
+    for (const [frame, bar] of alignBars) {
+      if (frame.isConnected) action(bar);
+      else alignBars.delete(frame);
+    }
+  }
   function fitPair(root, frame, pair) {
     let done = false;
     const apply = () => {
@@ -292,7 +301,7 @@
           localStorage.setItem(ALIGN_KEY, align);
         } catch {
         }
-        for (const listener of alignListeners) listener();
+        eachAlignBar((bar2) => bar2.sync());
       });
       return { align, button };
     });
@@ -339,9 +348,9 @@
         }
       });
     };
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && waitingForPermission && loadAlign() === "auto") runAuto();
-    });
+    const retryAuto = () => {
+      if (waitingForPermission && loadAlign() === "auto") runAuto();
+    };
     const sync2 = () => {
       let current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
       if (found && current !== "auto") current = "left";
@@ -354,7 +363,7 @@
       else if (autoPlacement) placeOnCanvas(frame, beforeSize, afterSize, autoPlacement);
       else runAuto();
     };
-    alignListeners.add(sync2);
+    alignBars.set(frame, { sync: sync2, retryAuto });
     sync2();
     return bar;
   }
