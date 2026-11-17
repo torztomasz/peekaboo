@@ -10,7 +10,8 @@
     "package": "sh scripts/package.sh"
   },
   "devDependencies": {
+    "@types/chrome": "^0.0.287",
     "esbuild": "^0.25.0",
-    "@types/chrome": "^0.0.287"
+    "playwright-core": "^1.65.1"
   }
 }
