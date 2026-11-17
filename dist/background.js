@@ -79,14 +79,14 @@
       placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
     }
     const changes = changeMaps(b, a, placement);
-    return { placement, diff: await diffImage(changes), stats: exact ? changes.stats : null };
+    return { placement, diff: await diffImage(changes), same: exact ? changes.changed === 0 : null };
   }
   var AS_IS = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
   async function compare({ before, after }) {
     if (!await chrome.permissions.contains({ origins: IMAGE_ORIGINS })) return { needsPermission: true };
     const [b, a] = await Promise.all([load(before), load(after)]);
     if (b.width !== a.width || b.height !== a.height) return compareDensities(b, a);
-    return { stats: changeMaps(b, a, AS_IS).stats };
+    return { same: changeMaps(b, a, AS_IS).changed === 0 };
   }
   function slideSideways(wide, narrow) {
     const slack = wide.width - narrow.width;
@@ -146,7 +146,7 @@
     };
     const b = pixels(before), a = pixels(after);
     const removed = new Float32Array(width * height), added = new Float32Array(width * height);
-    const stats = { changed: 0, compared: 0, regions: [] };
+    let changed = 0;
     for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
       for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
         const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
@@ -159,19 +159,19 @@
         const r = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06)), g = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
         removed[y * width + x] = r;
         added[y * width + x] = g;
-        stats.compared++;
-        if (r > 0 || g > 0) stats.changed++;
+        if (r > 0 || g > 0) changed++;
       }
     }
-    stats.regions = findRegions(removed, added, width, height);
-    return { removed, added, width, height, stats };
+    return { removed, added, width, height, changed };
   }
   var EDGE_TOLERANCE = 0.5;
   var SEED_STRENGTH = 0.25;
+  var CELL = 8;
+  var REACH = 2;
   async function compareDensities(before, after) {
     const width = Math.min(before.width, after.width);
     const changes = tolerantChangeMaps(resample(before, width), resample(after, width));
-    return { stats: changes.stats, diff: await diffImage(changes) };
+    return { same: changes.changed === 0, diff: await diffImage(changes) };
   }
   function resample(bitmap, width) {
     const height = Math.round(bitmap.height * width / bitmap.width);
@@ -223,73 +223,17 @@
       const col = cell % cols, row = cell / cols | 0;
       for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) kept.fill(1, r * cols + Math.max(0, col - REACH), r * cols + Math.min(cols, col + REACH + 1));
     });
-    const stats = { changed: 0, compared: width * overlap, regions: [] };
+    let changed = 0;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const p = y * width + x;
         if (!kept[(y / CELL | 0) * cols + (x / CELL | 0)]) {
           removed[p] = 0;
           added[p] = 0;
-        } else if (removed[p] > 0 || added[p] > 0) stats.changed++;
+        } else if (removed[p] > 0 || added[p] > 0) changed++;
       }
     }
-    stats.regions = findRegions(removed, added, width, height);
-    return { removed, added, width, height, stats };
-  }
-  var CELL = 8;
-  var REACH = 2;
-  var MAX_REGIONS = 99;
-  function findRegions(removed, added, width, height) {
-    const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
-    const hit = new Uint8Array(cols * rows);
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const i = y * width + x;
-        if (removed[i] > 0 || added[i] > 0) hit[(y / CELL | 0) * cols + (x / CELL | 0)] = 1;
-      }
-    }
-    const tighten = (bx0, by0, bx1, by1) => {
-      let x0 = bx1, y0 = by1, x1 = bx0, y1 = by0;
-      for (let y = by0; y < by1; y++) {
-        for (let x = bx0; x < bx1; x++) {
-          const i = y * width + x;
-          if (removed[i] > 0 || added[i] > 0) {
-            x0 = Math.min(x0, x);
-            x1 = Math.max(x1, x + 1);
-            y0 = Math.min(y0, y);
-            y1 = Math.max(y1, y + 1);
-          }
-        }
-      }
-      return { x0, y0, x1, y1 };
-    };
-    const seen = new Uint8Array(cols * rows);
-    const regions = [];
-    for (let start = 0; start < hit.length && regions.length < MAX_REGIONS; start++) {
-      if (!hit[start] || seen[start]) continue;
-      let left = cols, right = 0, top = rows, bottom = 0;
-      const stack = [start];
-      seen[start] = 1;
-      while (stack.length) {
-        const cell = stack.pop(), col = cell % cols, row = cell / cols | 0;
-        left = Math.min(left, col);
-        right = Math.max(right, col);
-        top = Math.min(top, row);
-        bottom = Math.max(bottom, row);
-        for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) {
-          for (let c = Math.max(0, col - REACH); c <= Math.min(cols - 1, col + REACH); c++) {
-            const next = r * cols + c;
-            if (hit[next] && !seen[next]) {
-              seen[next] = 1;
-              stack.push(next);
-            }
-          }
-        }
-      }
-      const box = tighten(left * CELL, top * CELL, Math.min(width, (right + 1) * CELL), Math.min(height, (bottom + 1) * CELL));
-      regions.push({ x: box.x0 / width, y: box.y0 / height, w: (box.x1 - box.x0) / width, h: (box.y1 - box.y0) / height });
-    }
-    return regions;
+    return { removed, added, width, height, changed };
   }
   async function diffImage({ removed, added, width, height }) {
     const out = new ImageData(width, height);

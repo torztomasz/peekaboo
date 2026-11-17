@@ -7,12 +7,10 @@ import { FULL_SIZE_ROWS, type Gray, locate } from "./match";
 
 type PairRequest = { type: "align" | "compare"; before: string; after: string };
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
-// `changed` of `compared` pixels differ visibly (by the same rule that colours the diff).
-// `regions` are the separate places that changed, as fractions of the shared canvas, top to bottom.
-type Stats = { changed: number; compared: number; regions: Region[] };
-type Region = { x: number; y: number; w: number; h: number };
-type AlignResponse = { placement: Placement; diff: string; stats: Stats | null } | { needsPermission: true } | { error: string };
-type CompareResponse = { stats: Stats; diff?: string } | { needsPermission: true } | { error: string };
+// `same`: no pixel differs visibly (by the rule that colours the diff), so the same screenshot was likely
+// uploaded twice. Null where the two don't line up pixel for pixel, so it can't be told.
+type AlignResponse = { placement: Placement; diff: string; same: boolean | null } | { needsPermission: true } | { error: string };
+type CompareResponse = { same: boolean; diff?: string } | { needsPermission: true } | { error: string };
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message?.type === "align" || message?.type === "compare") {
@@ -50,7 +48,7 @@ async function findOffset({ before, after }: PairRequest): Promise<AlignResponse
   const fits = (outer: ImageBitmap, inner: ImageBitmap) => outer.width >= inner.width && outer.height >= inner.height;
   let placement: Placement | null = null;
   // Only a crop lines up pixel for pixel. Two window widths of a page reflow (columns move, rows end at
-  // another edge), so sliding one sideways leaves layout differences a count would report as changes.
+  // another edge), so sliding one sideways leaves layout differences that would read as changes.
   let exact = false;
   if (fits(b, a) || fits(a, b)) {
     const beforeOutside = fits(b, a);
@@ -66,11 +64,11 @@ async function findOffset({ before, after }: PairRequest): Promise<AlignResponse
     placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
   }
   const changes = changeMaps(b, a, placement);
-  return { placement, diff: await diffImage(changes), stats: exact ? changes.stats : null };
+  return { placement, diff: await diffImage(changes), same: exact ? changes.changed === 0 : null };
 }
 
-// Same-size pairs line up as they are, so the page only needs to know how much changed. It's the cheap
-// way to catch the same screenshot uploaded twice, which Diff would show as a reassuring blank.
+// Same-size pairs line up as they are, so the page only needs to know whether anything changed. It's the
+// cheap way to catch the same screenshot uploaded twice, which Diff would show as a reassuring blank.
 // Pairs at two pixel densities also get the diff itself: the page's compositor Diff can't tell resampling
 // from change (see compareDensities).
 const AS_IS: Placement = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
@@ -79,7 +77,7 @@ async function compare({ before, after }: PairRequest): Promise<CompareResponse>
   if (!(await chrome.permissions.contains({ origins: IMAGE_ORIGINS }))) return { needsPermission: true };
   const [b, a] = await Promise.all([load(before), load(after)]);
   if (b.width !== a.width || b.height !== a.height) return compareDensities(b, a);
-  return { stats: changeMaps(b, a, AS_IS).stats };
+  return { same: changeMaps(b, a, AS_IS).changed === 0 };
 }
 
 function slideSideways(wide: ImageBitmap, narrow: ImageBitmap) {
@@ -135,7 +133,8 @@ function bestOffset(wide: Gray, narrow: Gray, slack: number, overhang: number, f
 // 1px); pixels only one screenshot covers stay clear, since there is nothing to compare them with.
 const REMOVED = [219, 36, 46], ADDED = [26, 184, 77];
 
-type ChangeMaps = { removed: Float32Array; added: Float32Array; width: number; height: number; stats: Stats };
+// `changed` counts the pixels that differ visibly.
+type ChangeMaps = { removed: Float32Array; added: Float32Array; width: number; height: number; changed: number };
 
 function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY, afterX, afterY }: Placement): ChangeMaps {
   const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height + beforeY, after.height + afterY);
@@ -147,7 +146,7 @@ function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY,
   };
   const b = pixels(before), a = pixels(after);
   const removed = new Float32Array(width * height), added = new Float32Array(width * height);
-  const stats: Stats = { changed: 0, compared: 0, regions: [] };
+  let changed = 0;
   for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
     for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
       const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
@@ -159,12 +158,10 @@ function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY,
       const r = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06)), g = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
       removed[y * width + x] = r;
       added[y * width + x] = g;
-      stats.compared++;
-      if (r > 0 || g > 0) stats.changed++;
+      if (r > 0 || g > 0) changed++;
     }
   }
-  stats.regions = findRegions(removed, added, width, height);
-  return { removed, added, width, height, stats };
+  return { removed, added, width, height, changed };
 }
 
 // ---------- Two pixel densities ----------
@@ -177,12 +174,14 @@ function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY,
 // filter rings (measured on 2x and 1.5x captures). Inside such a place the diff shows everything the 1px
 // tolerance leaves, so a reworded label shows whole glyphs, not just the pixels that cleared the edge test.
 const EDGE_TOLERANCE = 0.5, SEED_STRENGTH = 0.25;
+// "Such a place": up to 2 cells of 8px from a pixel that cleared the edge test.
+const CELL = 8, REACH = 2;
 
 async function compareDensities(before: ImageBitmap, after: ImageBitmap): Promise<CompareResponse> {
   // The page shows both at one width, heights following, so compare them the same way.
   const width = Math.min(before.width, after.width);
   const changes = tolerantChangeMaps(resample(before, width), resample(after, width));
-  return { stats: changes.stats, diff: await diffImage(changes) };
+  return { same: changes.changed === 0, diff: await diffImage(changes) };
 }
 
 type Rgba = { data: Uint8ClampedArray; width: number; height: number };
@@ -217,8 +216,7 @@ function tolerantChangeMaps(before: Rgba, after: Rgba): ChangeMaps {
   };
   const strength = (gap: number) => Math.min(1, Math.max(0, 6 * gap - 0.06));
 
-  // Pass 1: the 1px-tolerant diff, and which 8px cells (as findRegions groups them) hold a pixel that
-  // also clears the edge test.
+  // Pass 1: the 1px-tolerant diff, and which 8px cells hold a pixel that also clears the edge test.
   const removed = new Float32Array(width * height), added = new Float32Array(width * height);
   const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
   const seeded = new Uint8Array(cols * rows);
@@ -233,71 +231,21 @@ function tolerantChangeMaps(before: Rgba, after: Rgba): ChangeMaps {
       if (seed) seeded[((y / CELL) | 0) * cols + ((x / CELL) | 0)] = 1;
     }
   }
-  // Pass 2: keep the diff only as far from a seed as findRegions reaches to join one place.
+  // Pass 2: keep the diff only within REACH cells of a seed.
   const kept = new Uint8Array(cols * rows);
   seeded.forEach((seed, cell) => {
     if (!seed) return;
     const col = cell % cols, row = (cell / cols) | 0;
     for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) kept.fill(1, r * cols + Math.max(0, col - REACH), r * cols + Math.min(cols, col + REACH + 1));
   });
-  const stats: Stats = { changed: 0, compared: width * overlap, regions: [] };
+  let changed = 0;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = y * width + x;
-      if (!kept[((y / CELL) | 0) * cols + ((x / CELL) | 0)]) { removed[p] = 0; added[p] = 0; } else if (removed[p] > 0 || added[p] > 0) stats.changed++;
+      if (!kept[((y / CELL) | 0) * cols + ((x / CELL) | 0)]) { removed[p] = 0; added[p] = 0; } else if (removed[p] > 0 || added[p] > 0) changed++;
     }
   }
-  stats.regions = findRegions(removed, added, width, height);
-  return { removed, added, width, height, stats };
-}
-
-// What a reviewer calls one change (a reworded label, a moved button) is often several blobs of pixels a
-// few apart, so changed pixels are pooled into 8px cells and cells up to 2 apart join one region.
-const CELL = 8, REACH = 2, MAX_REGIONS = 99;
-
-function findRegions(removed: Float32Array, added: Float32Array, width: number, height: number): Region[] {
-  const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
-  const hit = new Uint8Array(cols * rows);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      if (removed[i] > 0 || added[i] > 0) hit[((y / CELL) | 0) * cols + ((x / CELL) | 0)] = 1;
-    }
-  }
-  // Cells only decide what belongs together; the box is drawn round the changed pixels themselves, or its
-  // edges would stick out by however far the change sits from the 8px grid (up to 28px on screen at 4x).
-  const tighten = (bx0: number, by0: number, bx1: number, by1: number) => {
-    let x0 = bx1, y0 = by1, x1 = bx0, y1 = by0;
-    for (let y = by0; y < by1; y++) {
-      for (let x = bx0; x < bx1; x++) {
-        const i = y * width + x;
-        if (removed[i] > 0 || added[i] > 0) { x0 = Math.min(x0, x); x1 = Math.max(x1, x + 1); y0 = Math.min(y0, y); y1 = Math.max(y1, y + 1); }
-      }
-    }
-    return { x0, y0, x1, y1 };
-  };
-  const seen = new Uint8Array(cols * rows);
-  const regions: Region[] = [];
-  // Row-major scan, so each region is found from its top edge and the list comes out top to bottom.
-  for (let start = 0; start < hit.length && regions.length < MAX_REGIONS; start++) {
-    if (!hit[start] || seen[start]) continue;
-    let left = cols, right = 0, top = rows, bottom = 0;
-    const stack = [start];
-    seen[start] = 1;
-    while (stack.length) {
-      const cell = stack.pop()!, col = cell % cols, row = (cell / cols) | 0;
-      left = Math.min(left, col); right = Math.max(right, col); top = Math.min(top, row); bottom = Math.max(bottom, row);
-      for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) {
-        for (let c = Math.max(0, col - REACH); c <= Math.min(cols - 1, col + REACH); c++) {
-          const next = r * cols + c;
-          if (hit[next] && !seen[next]) { seen[next] = 1; stack.push(next); }
-        }
-      }
-    }
-    const box = tighten(left * CELL, top * CELL, Math.min(width, (right + 1) * CELL), Math.min(height, (bottom + 1) * CELL));
-    regions.push({ x: box.x0 / width, y: box.y0 / height, w: (box.x1 - box.x0) / width, h: (box.y1 - box.y0) / height });
-  }
-  return regions;
+  return { removed, added, width, height, changed };
 }
 
 async function diffImage({ removed, added, width, height }: ChangeMaps) {

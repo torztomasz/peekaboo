@@ -23,10 +23,9 @@ at two thumbnails side by side.
   capture, a detail inside a screen) is placed exactly where it matches, and two window widths of one
   page slide sideways to where they match; the diff is then computed at full resolution. Or line them up
   by the left edge, centre or right edge yourself.
-- **How much changed**: with Auto on, each pair says what share of its pixels changed, and warns when Before
-  and After are the same picture (the same screenshot uploaded twice looks like a clean Diff otherwise).
+- **Same picture**: with Auto on, a pair warns when Before and After are the same picture (the same
+  screenshot uploaded twice looks like a clean Diff otherwise).
 - **Full screen**: one pair at a time, ← → through every pair in the PR, 1–2 to switch modes, Esc to close.
-  With Auto on, ↑ ↓ zoom to each place that changed, outlined, and back out after the last one.
 
 Your chosen mode sticks across tables and PRs. Recordings (videos) get a Play button that starts both in
 step.
@@ -85,7 +84,7 @@ Installs with no permissions beyond running on `github.com`, and no analytics. *
 exception, and it's optional: turn it on from the welcome tab that opens on install, from the toolbar icon
 (it opens Peekaboo's settings), or from the prompt on a pull request whose screenshots differ in size.
 Chrome then asks once to read images from GitHub's image server (`private-user-images.githubusercontent.com`), because GitHub serves uploads without CORS headers
-and page code can't read their pixels. Without it, Left, Center and Right still work, and pairs don't say how much changed. The only things stored
+and page code can't read their pixels. Without it, Left, Center and Right still work, and pairs don't warn about the same picture. The only things stored
 are your chosen mode and alignment, in the page's `localStorage`. See [PRIVACY.md](PRIVACY.md).
 
 ## Build it yourself
