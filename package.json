@@ -2,9 +2,11 @@
   "name": "peekaboo",
   "version": "1.5.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "esbuild src/content.ts src/background.ts src/options.ts --bundle --format=iife --target=chrome120 --outdir=dist",
     "watch": "npm run build -- --watch",
+    "test": "node --test test/*.test.ts",
     "package": "sh scripts/package.sh"
   },
   "devDependencies": {
