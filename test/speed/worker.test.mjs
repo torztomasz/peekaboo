@@ -18,8 +18,9 @@ after(() => browser?.close());
 // scenario is timed against a yardstick run right before it: a fixed loop of byte arithmetic, the kind of
 // work the worker does. A budget is how many yardsticks a scenario may take, about five times what it
 // takes today (printed with PEEKABOO_SPEED_REPORT=1). Each scenario is warmed up once and measured five
-// times; the best ratio counts, since a busy machine only ever adds time. Each reply's placement is
-// checked against where the scenario was cut from.
+// times, a yardstick before each; the fastest reply is divided by the fastest yardstick, since a busy
+// machine only ever adds time to either. Each reply's placement is checked against where the scenario
+// was cut from.
 const BUDGETS = {
   "compare 2560×1600 (one button changed)": 2,
   "align viewport crop of a 1280×6000 full page": 6,
@@ -46,16 +47,16 @@ test("works out each kind of pair a pull request carries within its time budget,
     const fresh = async (url) => URL.createObjectURL(await (await fetch(url)).blob());
     const out = {};
     for (const [name, { type, before, after, expect }] of Object.entries(await screens.scenarios())) {
-      const ratios = [];
+      const units = [], replies = [];
       let reply;
       for (let run = 0; run < 6; run++) {
         const message = { type, before: await fresh(before), after: await fresh(after) };
         const unit = yardstick();
         const start = performance.now();
         reply = await ask(message);
-        if (run > 0) ratios.push((performance.now() - start) / unit);
+        if (run > 0) units.push(unit), replies.push(performance.now() - start);
       }
-      out[name] = { yardsticks: Math.min(...ratios), placement: reply.placement, expect, error: reply.error };
+      out[name] = { yardsticks: Math.min(...replies) / Math.min(...units), placement: reply.placement, expect, error: reply.error };
     }
     return out;
   });

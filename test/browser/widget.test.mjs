@@ -141,21 +141,23 @@ const recording = (name) => `<video src="https://private-user-images.githubuserc
 const recordings = pullRequest(table({ rows: [[recording("before"), recording("after")]] }));
 // No media is decoded here, so the browser's own playback calls are what gets recorded.
 const recordPlayback = () => {
-  window.playback = [];
   const proto = HTMLMediaElement.prototype;
   const side = (video) => video.src.match(/(before|after)\.mp4$/)[1];
-  proto.play = function () { window.playback.push(`play ${side(this)}`); return Promise.resolve(); };
-  proto.pause = function () { window.playback.push(`pause ${side(this)}`); };
-  Object.defineProperty(proto, "currentTime", { set(time) { window.playback.push(`seek ${side(this)} ${time}`); }, get: () => 3 });
+  const note = (video, call) => window.playback[side(video)].push(call);
+  window.playback = { before: [], after: [] };
+  proto.play = function () { note(this, "play"); return Promise.resolve(); };
+  proto.pause = function () { note(this, "pause"); };
+  Object.defineProperty(proto, "currentTime", { set(time) { note(this, `seek ${time}`); }, get: () => 3 });
 };
 
 test("recordings get a Play button that starts both from the beginning together, and pauses both", async () => {
   await withPullRequest(browser, recordings, { before: recordPlayback }, async ({ page }) => {
     await page.getByRole("button", { name: "▶ Play" }).click();
-    const calls = async () => (await page.evaluate(() => window.playback.splice(0))).sort();
-    assert.deepEqual(await calls(), ["play after", "play before", "seek after 0", "seek before 0"]);
+    // Per recording, in the order they were made: rewound first, then played.
+    const calls = () => page.evaluate(() => ({ before: window.playback.before.splice(0), after: window.playback.after.splice(0) }));
+    assert.deepEqual(await calls(), { before: ["seek 0", "play"], after: ["seek 0", "play"] });
     await page.getByRole("button", { name: "❚❚ Pause" }).click();
-    assert.deepEqual(await calls(), ["pause after", "pause before"]);
+    assert.deepEqual(await calls(), { before: ["pause"], after: ["pause"] });
     assert.equal(await page.getByRole("button", { name: "▶ Play" }).count(), 1);
   });
   await withPullRequest(browser, pullRequest(pair(beforeShot, afterShot)), {}, async ({ page }) => {
