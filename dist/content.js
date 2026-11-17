@@ -12,7 +12,6 @@
   var widgets = /* @__PURE__ */ new Set();
   main();
   function main() {
-    injectStyles();
     let scheduled = false;
     const scheduleSync = () => {
       if (scheduled) return;
@@ -22,7 +21,9 @@
         sync();
       });
     };
-    new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
+    new MutationObserver((records) => {
+      if (records.some((record) => hasTable(record.addedNodes) || hasTable(record.removedNodes))) scheduleSync();
+    }).observe(document.body, { childList: true, subtree: true });
     document.addEventListener("keydown", handleViewerKeys, true);
     document.addEventListener("keydown", keepFocusInside, true);
     document.addEventListener("keydown", (event) => event.key === "Shift" && !event.repeat && startPeek(event), true);
@@ -33,8 +34,13 @@
     });
     scheduleSync();
   }
+  function hasTable(nodes) {
+    for (const node of nodes) {
+      if (node.nodeType === Node.ELEMENT_NODE && (node.tagName === "TABLE" || node.querySelector("table"))) return true;
+    }
+    return false;
+  }
   function sync() {
-    ensureDiffFilters();
     removeOrphanWidgets();
     for (const table of document.querySelectorAll(".markdown-body table")) {
       if (table.dataset[PROCESSED]) continue;
@@ -64,6 +70,7 @@
     return pairs;
   }
   function buildWidget(table, pairs) {
+    ensureStyles();
     const widget = el("div", PREFIX);
     const toolbar = el("div", `${PREFIX}-toolbar`);
     const view = el("div", `${PREFIX}-view`);
@@ -145,8 +152,8 @@
       frame.dataset.mode = shown;
       legend.dataset.mode = shown;
       const toneKnown = Boolean(frame.dataset.tone);
-      beforeTag.textContent = shown === "diff" && toneKnown ? "Removed" : "Before";
-      afterTag.textContent = shown === "diff" && toneKnown ? "Added" : "After";
+      setText(beforeTag, shown === "diff" && toneKnown ? "Removed" : "Before");
+      setText(afterTag, shown === "diff" && toneKnown ? "Added" : "After");
       after.style.visibility = shown === "flip" && beforeShown ? "hidden" : "visible";
       if (shown === "diff") {
         if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
@@ -222,6 +229,7 @@
     peekingAt = null;
   }
   function buildDiffLayers(beforeSource, afterSource) {
+    ensureDiffFilters();
     const onlyBefore = diffLayer([beforeSource, "before"], [afterSource, "after"], "removed");
     const onlyAfter = diffLayer([afterSource, "after"], [beforeSource, "before"], "added");
     return [onlyBefore, onlyAfter];
@@ -694,13 +702,18 @@
     node.textContent = text;
     return node;
   }
+  function setText(node, text) {
+    if (node.textContent !== text) node.textContent = text;
+  }
   function el(name, className) {
     const node = document.createElement(name);
     node.className = className;
     return node;
   }
-  function injectStyles() {
-    const style = document.createElement("style");
+  var styles = null;
+  function ensureStyles() {
+    if (styles?.isConnected) return;
+    const style = styles = document.createElement("style");
     style.textContent = `
 /* GitHub's markdown gives the table it stands in for a 16px bottom margin. */
 .${PREFIX} { margin-bottom: 16px; }
