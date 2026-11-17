@@ -97,7 +97,7 @@
     const entry = {
       root: widget,
       applyMode,
-      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, regions: stage.regions, zoomTo: stage.zoomTo }))
+      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, regions: stage.regions, zoomTo: stage.zoomTo }))
     };
     widgets.add(entry);
     expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -173,20 +173,21 @@
       }
       render();
     });
-    frame.addEventListener("pointerdown", () => {
+    function flip() {
       if (frame.dataset.mode !== "flip") return;
       showingBefore = !showingBefore;
       render();
-    });
+    }
+    frame.addEventListener("pointerdown", flip);
     frame.addEventListener("keydown", (event) => {
-      if (frame.dataset.mode !== "flip" || event.key !== " " && event.key !== "Enter") return;
+      if (event.key !== " " && event.key !== "Enter") return;
       event.preventDefault();
-      showingBefore = !showingBefore;
-      render();
+      flip();
     });
     return {
       root,
       regions: () => regions,
+      flip,
       zoomTo,
       videos: [before, after].filter((media) => media instanceof HTMLVideoElement),
       setMode(next) {
@@ -469,7 +470,7 @@
     segmented.append(...modeButtons.map(({ button }) => button));
     const changes = el("div", `${PREFIX}-viewer-changes`);
     const changeLabel = el("span", `${PREFIX}-viewer-counter`);
-    changes.append(navButton("\u2039", "Previous change (P)", () => stepChange(-1)), changeLabel, navButton("\u203A", "Next change (N)", () => stepChange(1)));
+    changes.append(navButton("\u2191", "Previous change (\u2191)", () => stepChange(-1)), changeLabel, navButton("\u2193", "Next change (\u2193)", () => stepChange(1)));
     const close = navButton("\u2715", "Close (Esc)", closeViewer);
     close.classList.add(`${PREFIX}-viewer-close`);
     bar.append(previous, counter, next, segmented, changes, close);
@@ -479,10 +480,14 @@
     const caption = el("p", `${PREFIX}-viewer-caption`);
     column.append(caption);
     body.append(column);
-    overlay.append(bar, title, body);
+    const keys = buildKeyHints();
+    overlay.append(bar, title, body, keys.row);
     document.body.append(overlay);
     document.documentElement.classList.add(`${PREFIX}-locked`);
-    viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+    viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel, key: keys.change }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+    overlay.addEventListener("mousedown", (event) => {
+      if (event.target.closest("button")) event.preventDefault();
+    });
     overlay.addEventListener("peekaboo:regions", (event) => {
       if (viewer && event.target === viewer.slides[viewer.index]?.stage) showChange(-1);
     });
@@ -518,6 +523,7 @@
     viewer.change = change;
     slide.zoomTo(regions[change] ?? null);
     viewer.changes.group.hidden = regions.length === 0;
+    viewer.changes.key.hidden = regions.length === 0;
     const many = regions.length === 1 ? "1 change" : `${regions.length} changes`;
     viewer.changes.label.textContent = change < 0 ? many : `${change + 1} of ${many}`;
   }
@@ -552,10 +558,10 @@
     if (event.key === "Escape") closeViewer();
     else if (event.key === "ArrowLeft") stepViewer(-1);
     else if (event.key === "ArrowRight") stepViewer(1);
+    else if (event.key === "ArrowUp") stepChange(-1);
+    else if (event.key === "ArrowDown") stepChange(1);
     else if (VIEWER_MODES[modeIndex]) setModeEverywhere(VIEWER_MODES[modeIndex].mode);
-    else if (event.metaKey || event.ctrlKey || event.altKey) return;
-    else if (event.key.toLowerCase() === "n") stepChange(1);
-    else if (event.key.toLowerCase() === "p") stepChange(-1);
+    else if ((event.key === " " || event.key === "Enter") && !(event.target instanceof HTMLButtonElement)) viewer.slides[viewer.index].flip();
     else return;
     event.preventDefault();
     event.stopPropagation();
@@ -573,6 +579,22 @@
     let node = table;
     while (!node.nextElementSibling && node.parentElement?.tagName.includes("-")) node = node.parentElement;
     return node;
+  }
+  function buildKeyHints() {
+    const row = el("div", `${PREFIX}-viewer-keys`);
+    const hint = (keys, action) => {
+      const item = el("span", `${PREFIX}-viewer-key`);
+      for (const key of keys) item.append(Object.assign(el("kbd", ""), { textContent: key }));
+      item.append(` ${action}`);
+      row.append(item);
+      return item;
+    };
+    hint(["\u2190", "\u2192"], "pair");
+    const change = hint(["\u2191", "\u2193"], "change");
+    hint(["Space"], "flip");
+    hint(VIEWER_MODES.map((_, index) => String(index + 1)), VIEWER_MODES.map(({ label }) => label).join(" / "));
+    hint(["Esc"], "close");
+    return { row, change };
   }
   function navButton(text, title, onClick) {
     const button = el("button", `${PREFIX}-nav`);
@@ -677,14 +699,22 @@
   padding: 12px 24px 16px; background: var(--bgColor-default, #fff); color: var(--fgColor-default, #1f2328);
   font-size: 14px;
 }
-.${PREFIX}-viewer-bar { display: flex; align-items: center; gap: 8px; }
-.${PREFIX}-viewer-counter { min-width: 56px; text-align: center; font-variant-numeric: tabular-nums; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-viewer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.${PREFIX}-viewer-bar > * { flex-shrink: 0; }
+.${PREFIX}-viewer-counter { min-width: 56px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--fgColor-muted, #59636e); }
 .${PREFIX}-nav {
   font: inherit; font-size: 18px; line-height: 1; width: 32px; height: 28px; cursor: pointer; border-radius: 6px;
   color: var(--fgColor-default, #1f2328); background: var(--bgColor-default, #fff); border: 1px solid var(--borderColor-default, #d1d9e0);
 }
 .${PREFIX}-nav:hover { background: var(--bgColor-muted, #f6f8fa); }
 .${PREFIX}-viewer-bar .${PREFIX}-segmented { margin-left: 8px; }
+.${PREFIX}-viewer-keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-viewer-key { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.${PREFIX}-viewer-key kbd {
+  font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 18px; padding: 0 4px; text-align: center;
+  border: 1px solid var(--borderColor-default, #d1d9e0); border-bottom-width: 2px; border-radius: 4px;
+  background: var(--bgColor-muted, #f6f8fa); color: var(--fgColor-default, #1f2328);
+}
 .${PREFIX}-viewer-changes { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
 .${PREFIX}-viewer-changes .${PREFIX}-viewer-counter { min-width: 96px; }
 .${PREFIX}-viewer-close { margin-left: auto; font-size: 14px; }

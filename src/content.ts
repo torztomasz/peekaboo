@@ -27,7 +27,7 @@ type Widget = { root: HTMLElement; applyMode: (mode: Mode) => void; slides: Slid
 
 // One pair as the full-screen viewer shows it: the stage element plus the text that explains it, and the
 // places that changed (known only with Auto's permission) with a way to zoom to one of them.
-type Slide = { stage: HTMLElement; label: string; caption: string; regions: () => Region[]; zoomTo: (region: Region | null) => void };
+type Slide = { stage: HTMLElement; label: string; caption: string; flip: () => void; regions: () => Region[]; zoomTo: (region: Region | null) => void };
 
 main();
 
@@ -138,7 +138,7 @@ function buildWidget(table: HTMLTableElement, pairs: Pair[]) {
   const entry: Widget = {
     root: widget,
     applyMode,
-    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, regions: stage.regions, zoomTo: stage.zoomTo })),
+    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, regions: stage.regions, zoomTo: stage.zoomTo })),
   };
   widgets.add(entry);
   expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -224,21 +224,22 @@ function buildStage(pair: Pair) {
     }
     render();
   });
-  frame.addEventListener("pointerdown", () => {
+  function flip() {
     if (frame.dataset.mode !== "flip") return;
     showingBefore = !showingBefore;
     render();
-  });
+  }
+  frame.addEventListener("pointerdown", flip);
   frame.addEventListener("keydown", (event) => {
-    if (frame.dataset.mode !== "flip" || (event.key !== " " && event.key !== "Enter")) return;
+    if (event.key !== " " && event.key !== "Enter") return;
     event.preventDefault();
-    showingBefore = !showingBefore;
-    render();
+    flip();
   });
 
   return {
     root,
     regions: () => regions,
+    flip,
     zoomTo,
     videos: [before, after].filter((media): media is HTMLVideoElement => media instanceof HTMLVideoElement),
     setMode(next: Mode) {
@@ -555,7 +556,7 @@ let viewer: {
   title: HTMLElement;
   caption: HTMLElement;
   modeButtons: { mode: Mode; button: HTMLButtonElement }[];
-  changes: { group: HTMLElement; label: HTMLElement };
+  changes: { group: HTMLElement; label: HTMLElement; key: HTMLElement };
   slides: Slide[];
   index: number;
   // Which of the current slide's regions is zoomed in, or -1 for the whole pair.
@@ -586,7 +587,7 @@ function openViewer(start: Slide) {
   segmented.append(...modeButtons.map(({ button }) => button));
   const changes = el("div", `${PREFIX}-viewer-changes`);
   const changeLabel = el("span", `${PREFIX}-viewer-counter`);
-  changes.append(navButton("‹", "Previous change (P)", () => stepChange(-1)), changeLabel, navButton("›", "Next change (N)", () => stepChange(1)));
+  changes.append(navButton("↑", "Previous change (↑)", () => stepChange(-1)), changeLabel, navButton("↓", "Next change (↓)", () => stepChange(1)));
   const close = navButton("✕", "Close (Esc)", closeViewer);
   close.classList.add(`${PREFIX}-viewer-close`);
   bar.append(previous, counter, next, segmented, changes, close);
@@ -598,11 +599,16 @@ function openViewer(start: Slide) {
   const caption = el("p", `${PREFIX}-viewer-caption`);
   column.append(caption);
   body.append(column);
-  overlay.append(bar, title, body);
+  const keys = buildKeyHints();
+  overlay.append(bar, title, body, keys.row);
   document.body.append(overlay);
   document.documentElement.classList.add(`${PREFIX}-locked`);
 
-  viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+  viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel, key: keys.change }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+  // A clicked button would keep focus and swallow Space, which flips; buttons reached with Tab still take it.
+  overlay.addEventListener("mousedown", (event) => {
+    if ((event.target as Element).closest("button")) event.preventDefault();
+  });
   // Regions arrive from the background after the pair is already on screen, or change with the alignment.
   overlay.addEventListener("peekaboo:regions", (event) => {
     if (viewer && event.target === viewer.slides[viewer.index]?.stage) showChange(-1);
@@ -643,6 +649,7 @@ function showChange(change: number) {
   viewer.change = change;
   slide.zoomTo(regions[change] ?? null);
   viewer.changes.group.hidden = regions.length === 0;
+  viewer.changes.key.hidden = regions.length === 0;
   const many = regions.length === 1 ? "1 change" : `${regions.length} changes`;
   viewer.changes.label.textContent = change < 0 ? many : `${change + 1} of ${many}`;
 }
@@ -683,10 +690,10 @@ function handleViewerKeys(event: KeyboardEvent) {
   if (event.key === "Escape") closeViewer();
   else if (event.key === "ArrowLeft") stepViewer(-1);
   else if (event.key === "ArrowRight") stepViewer(1);
+  else if (event.key === "ArrowUp") stepChange(-1);
+  else if (event.key === "ArrowDown") stepChange(1);
   else if (VIEWER_MODES[modeIndex]) setModeEverywhere(VIEWER_MODES[modeIndex].mode);
-  else if (event.metaKey || event.ctrlKey || event.altKey) return;
-  else if (event.key.toLowerCase() === "n") stepChange(1);
-  else if (event.key.toLowerCase() === "p") stepChange(-1);
+  else if ((event.key === " " || event.key === "Enter") && !(event.target instanceof HTMLButtonElement)) viewer.slides[viewer.index].flip();
   else return;
   event.preventDefault();
   event.stopPropagation();
@@ -713,6 +720,24 @@ function outermostWrapper(table: HTMLTableElement) {
   let node: Element = table;
   while (!node.nextElementSibling && node.parentElement?.tagName.includes("-")) node = node.parentElement;
   return node;
+}
+
+// The keys are the fast way through a PR's pairs, and button tooltips only tell people who hover.
+function buildKeyHints() {
+  const row = el("div", `${PREFIX}-viewer-keys`);
+  const hint = (keys: string[], action: string) => {
+    const item = el("span", `${PREFIX}-viewer-key`);
+    for (const key of keys) item.append(Object.assign(el("kbd", ""), { textContent: key }));
+    item.append(` ${action}`);
+    row.append(item);
+    return item;
+  };
+  hint(["←", "→"], "pair");
+  const change = hint(["↑", "↓"], "change");
+  hint(["Space"], "flip");
+  hint(VIEWER_MODES.map((_, index) => String(index + 1)), VIEWER_MODES.map(({ label }) => label).join(" / "));
+  hint(["Esc"], "close");
+  return { row, change };
 }
 
 function navButton(text: string, title: string, onClick: () => void) {
@@ -826,14 +851,22 @@ function injectStyles() {
   padding: 12px 24px 16px; background: var(--bgColor-default, #fff); color: var(--fgColor-default, #1f2328);
   font-size: 14px;
 }
-.${PREFIX}-viewer-bar { display: flex; align-items: center; gap: 8px; }
-.${PREFIX}-viewer-counter { min-width: 56px; text-align: center; font-variant-numeric: tabular-nums; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-viewer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.${PREFIX}-viewer-bar > * { flex-shrink: 0; }
+.${PREFIX}-viewer-counter { min-width: 56px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--fgColor-muted, #59636e); }
 .${PREFIX}-nav {
   font: inherit; font-size: 18px; line-height: 1; width: 32px; height: 28px; cursor: pointer; border-radius: 6px;
   color: var(--fgColor-default, #1f2328); background: var(--bgColor-default, #fff); border: 1px solid var(--borderColor-default, #d1d9e0);
 }
 .${PREFIX}-nav:hover { background: var(--bgColor-muted, #f6f8fa); }
 .${PREFIX}-viewer-bar .${PREFIX}-segmented { margin-left: 8px; }
+.${PREFIX}-viewer-keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-viewer-key { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.${PREFIX}-viewer-key kbd {
+  font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 18px; padding: 0 4px; text-align: center;
+  border: 1px solid var(--borderColor-default, #d1d9e0); border-bottom-width: 2px; border-radius: 4px;
+  background: var(--bgColor-muted, #f6f8fa); color: var(--fgColor-default, #1f2328);
+}
 .${PREFIX}-viewer-changes { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
 .${PREFIX}-viewer-changes .${PREFIX}-viewer-counter { min-width: 96px; }
 .${PREFIX}-viewer-close { margin-left: auto; font-size: 14px; }
