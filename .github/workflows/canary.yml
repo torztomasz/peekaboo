@@ -1,0 +1,20 @@
+# Runs the extension against a pull request on github.com as it is today, to hear about it when GitHub
+# changes the markup the extension reads. A failure here means GitHub moved, not that a commit broke.
+name: canary
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright-core install --with-deps chromium-headless-shell
+      - run: npm run canary
