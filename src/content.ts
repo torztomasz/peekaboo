@@ -170,9 +170,8 @@ function buildStage(pair: Pair) {
   // The hatch Diff shows where only one screenshot exists needs a key next to red and green.
   const notCompared = el("span", `${PREFIX}-not-compared`);
   notCompared.textContent = "Not compared";
-  const middle = el("span", `${PREFIX}-legend-middle`);
-  middle.append(flipHint, notCompared);
-  legend.append(beforeTag, middle, afterTag);
+  // Everything at the left, so which side is on screen is always read in the same spot.
+  legend.append(beforeTag, afterTag, flipHint, notCompared);
   const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
 
   const same = el("p", `${PREFIX}-same`);
@@ -896,21 +895,23 @@ function injectStyles() {
 .${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
 .${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
 .${PREFIX}-align { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
-/* Before on the left, After on the right, like GitHub's own 2-up. In Flip the side on screen is underlined. */
-.${PREFIX}-legend { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; line-height: 20px; color: var(--fgColor-muted, #59636e); }
-.${PREFIX}-legend[data-mode="flip"][data-showing="before"] .${PREFIX}-tag-before,
-.${PREFIX}-legend[data-mode="flip"][data-showing="after"] .${PREFIX}-tag-after { color: var(--fgColor-default, #1f2328); box-shadow: inset 0 -2px var(--borderColor-accent-emphasis, #0969da); }
+/* Flip: one chip that swaps in place, After tinted so you notice a flip without reading the word.
+   Diff: the colour key, side by side. */
+.${PREFIX}-legend { display: flex; align-items: center; gap: 12px; font-size: 12px; font-weight: 600; line-height: 20px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-legend[data-mode="flip"][data-showing="before"] .${PREFIX}-tag-after,
+.${PREFIX}-legend[data-mode="flip"][data-showing="after"] .${PREFIX}-tag-before { display: none; }
+/* Wide enough for "Before", so the hint beside it doesn't shift on each flip. */
+.${PREFIX}-legend[data-mode="flip"] .${PREFIX}-tag { box-sizing: border-box; min-width: 56px; padding: 0 8px; border-radius: 999px; text-align: center; color: var(--fgColor-default, #1f2328); background: var(--bgColor-neutral-muted, #818b981f); }
+.${PREFIX}-legend[data-mode="flip"] .${PREFIX}-tag-after { color: var(--fgColor-accent, #0969da); background: var(--bgColor-accent-muted, #ddf4ff); }
 .${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-before { color: var(--fgColor-danger, #d1242f); }
 .${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-after { color: var(--fgColor-success, #1a7f37); }
-.${PREFIX}-legend-middle { display: grid; font-weight: 400; }
-.${PREFIX}-flip-hint, .${PREFIX}-not-compared { grid-area: 1 / 1; justify-self: center; visibility: hidden; }
-.${PREFIX}-legend[data-mode="flip"] .${PREFIX}-flip-hint { visibility: visible; }
+.${PREFIX}-flip-hint, .${PREFIX}-not-compared { display: none; font-weight: 400; }
+.${PREFIX}-legend[data-mode="flip"] .${PREFIX}-flip-hint { display: inline; }
 /* Full screen has its own key row. */
-.${PREFIX}-viewer-body .${PREFIX}-legend .${PREFIX}-flip-hint { visibility: hidden; }
-.${PREFIX}-not-compared { display: inline-flex; align-items: center; gap: 6px; }
+.${PREFIX}-viewer-body .${PREFIX}-legend .${PREFIX}-flip-hint { display: none; }
 /* A patch of the frame's own hatch; a bordered square would read as a checkbox. */
 .${PREFIX}-not-compared::before { content: ""; width: 16px; height: 10px; box-shadow: inset 0 0 0 1px var(--borderColor-muted, #d1d9e0b3); background: var(--${PREFIX}-hatch); }
-.${PREFIX}-stage[data-partial] .${PREFIX}-legend[data-mode="diff"] .${PREFIX}-not-compared { visibility: visible; }
+.${PREFIX}-stage[data-partial] .${PREFIX}-legend[data-mode="diff"] .${PREFIX}-not-compared { display: inline-flex; align-items: center; gap: 6px; }
 .${PREFIX}-diff, .${PREFIX}-diff-layer { grid-area: 1 / 1; display: grid; pointer-events: none; }
 .${PREFIX}-diff-layer { isolation: isolate; opacity: 0.8; }
 .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed); }
