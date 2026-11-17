@@ -12,7 +12,7 @@ type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: num
 type Stats = { changed: number; compared: number; regions: Region[] };
 type Region = { x: number; y: number; w: number; h: number };
 type AlignResponse = { placement: Placement; diff: string; stats: Stats | null } | { needsPermission: true } | { error: string };
-type CompareResponse = { stats: Stats } | { needsPermission: true } | { error: string };
+type CompareResponse = { stats: Stats; diff?: string } | { needsPermission: true } | { error: string };
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message?.type === "align" || message?.type === "compare") {
@@ -71,12 +71,14 @@ async function findOffset({ before, after }: PairRequest): Promise<AlignResponse
 
 // Same-size pairs line up as they are, so the page only needs to know how much changed. It's the cheap
 // way to catch the same screenshot uploaded twice, which Diff would show as a reassuring blank.
+// Pairs at two pixel densities also get the diff itself: the page's compositor Diff can't tell resampling
+// from change (see compareDensities).
 const AS_IS: Placement = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
 
 async function compare({ before, after }: PairRequest): Promise<CompareResponse> {
   if (!(await chrome.permissions.contains({ origins: IMAGE_ORIGINS }))) return { needsPermission: true };
   const [b, a] = await Promise.all([load(before), load(after)]);
-  if (b.width !== a.width || b.height !== a.height) return { error: "sizes differ" };
+  if (b.width !== a.width || b.height !== a.height) return compareDensities(b, a);
   return { stats: changeMaps(b, a, AS_IS).stats };
 }
 
@@ -162,6 +164,84 @@ function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY,
     }
   }
   stats.regions = findRegions(removed, added, width, height);
+  return { removed, added, width, height, stats };
+}
+
+// ---------- Two pixel densities ----------
+
+// A 2x and a 1x capture of one screen draw every edge differently: anti-aliasing, and stems that are one
+// dark pixel at 1x but two half-dark ones once 2x is scaled down. The strict rule, tuned to catch a 1px
+// shift, marks them all. So a pixel counts only if the other side has nothing as dark within 1px, and a
+// place counts as changed only where that gap also beats half the other side's local contrast plus a
+// floor: resampling errs by up to half an edge's contrast, and by a few levels in flat areas where its
+// filter rings (measured on 2x and 1.5x captures). Inside such a place the diff shows everything the 1px
+// tolerance leaves, so a reworded label shows whole glyphs, not just the pixels that cleared the edge test.
+const EDGE_TOLERANCE = 0.5, SEED_STRENGTH = 0.25;
+
+async function compareDensities(before: ImageBitmap, after: ImageBitmap): Promise<CompareResponse> {
+  // The page shows both at one width, heights following, so compare them the same way.
+  const width = Math.min(before.width, after.width);
+  const changes = tolerantChangeMaps(resample(before, width), resample(after, width));
+  return { stats: changes.stats, diff: await diffImage(changes) };
+}
+
+type Rgba = { data: Uint8ClampedArray; width: number; height: number };
+
+function resample(bitmap: ImageBitmap, width: number): Rgba {
+  const height = Math.round((bitmap.height * width) / bitmap.width);
+  const context = new OffscreenCanvas(width, height).getContext("2d")!;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(bitmap, 0, 0, width, height);
+  return { data: context.getImageData(0, 0, width, height).data, width, height };
+}
+
+function tolerantChangeMaps(before: Rgba, after: Rgba): ChangeMaps {
+  const width = before.width, height = Math.max(before.height, after.height), overlap = Math.min(before.height, after.height);
+  // Both measures below look at the 3x3 around (x, y) and are in summed channels / 255.
+  const around = (x: number, y: number, visit: (j: number) => void) => {
+    for (let yy = Math.max(0, y - 1); yy <= Math.min(overlap - 1, y + 1); yy++) {
+      for (let xx = Math.max(0, x - 1); xx <= Math.min(width - 1, x + 1); xx++) visit((yy * width + xx) * 4);
+    }
+  };
+  // How much darker `own` is than the closest match in `other`: 0 if `other` has it nearby.
+  const missing = (own: Uint8ClampedArray, other: Uint8ClampedArray, i: number, x: number, y: number) => {
+    let least = Infinity;
+    around(x, y, (j) => { least = Math.min(least, Math.max(0, other[j] - own[i]) + Math.max(0, other[j + 1] - own[i + 1]) + Math.max(0, other[j + 2] - own[i + 2])); });
+    return least / 255;
+  };
+  // How far the darkest and lightest pixels around are apart: where resampling errs most.
+  const contrast = (image: Uint8ClampedArray, x: number, y: number) => {
+    let lo = Infinity, hi = 0;
+    around(x, y, (j) => { const sum = image[j] + image[j + 1] + image[j + 2]; lo = Math.min(lo, sum); hi = Math.max(hi, sum); });
+    return (hi - lo) / 255;
+  };
+  const strength = (gap: number) => Math.min(1, Math.max(0, 6 * gap - 0.06));
+
+  // Pass 1: the 1px-tolerant diff, and the seeds that also clear the edge test.
+  const removed = new Float32Array(width * height), added = new Float32Array(width * height);
+  const seedRemoved = new Float32Array(width * height), seedAdded = new Float32Array(width * height);
+  for (let y = 0; y < overlap; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x, i = p * 4;
+      const lost = missing(before.data, after.data, i, x, y), gained = missing(after.data, before.data, i, x, y);
+      removed[p] = strength(lost);
+      added[p] = strength(gained);
+      if (removed[p] > 0 && strength(lost - EDGE_TOLERANCE * contrast(after.data, x, y)) >= SEED_STRENGTH) seedRemoved[p] = 1;
+      if (added[p] > 0 && strength(gained - EDGE_TOLERANCE * contrast(before.data, x, y)) >= SEED_STRENGTH) seedAdded[p] = 1;
+    }
+  }
+  // Pass 2: keep the diff only inside the places the seeds make.
+  const stats: Stats = { changed: 0, compared: width * overlap, regions: findRegions(seedRemoved, seedAdded, width, height) };
+  // Past the region cap the list is cut short, and hiding what it misses would read as unchanged.
+  const inside = new Uint8Array(width * height).fill(stats.regions.length < MAX_REGIONS ? 0 : 1);
+  for (const region of stats.regions) {
+    const x0 = Math.round(region.x * width), y0 = Math.round(region.y * height);
+    const x1 = Math.round((region.x + region.w) * width), y1 = Math.round((region.y + region.h) * height);
+    for (let y = y0; y < y1; y++) inside.fill(1, y * width + x0, y * width + x1);
+  }
+  for (let p = 0; p < width * height; p++) {
+    if (!inside[p]) { removed[p] = 0; added[p] = 0; } else if (removed[p] > 0 || added[p] > 0) stats.changed++;
+  }
   return { removed, added, width, height, stats };
 }
 
