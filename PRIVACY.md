@@ -7,7 +7,7 @@ Peekaboo does not collect, transmit or sell any data.
 - It contains no analytics or tracking and sends nothing anywhere.
 - Optional, only if you turn on Auto alignment: it downloads the two screenshots of a pair from GitHub's
   image servers (`private-user-images.githubusercontent.com`, `user-images.githubusercontent.com`) into the
-  extension, to find where they line up, compute the diff and count how many pixels changed. The images are processed in your browser
+  extension, to find where they line up, compute the diff and check whether any pixel changed. The images are processed in your browser
   and kept nowhere.
 - The only things it stores are the comparison mode and alignment you last picked, in your browser's
   `localStorage` for github.com. They never leave your browser.

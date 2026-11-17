@@ -25,9 +25,8 @@ const widgets = new Set<Widget>();
 
 type Widget = { root: HTMLElement; applyMode: (mode: Mode) => void; slides: Slide[] };
 
-// One pair as the full-screen viewer shows it: the stage element plus the text that explains it, and the
-// places that changed (known only with Auto's permission) with a way to zoom to one of them.
-type Slide = { stage: HTMLElement; label: string; caption: string; flip: () => void; peek: Peek; regions: () => Region[]; zoomTo: (region: Region | null) => void };
+// One pair as the full-screen viewer shows it: the stage element plus the text that explains it.
+type Slide = { stage: HTMLElement; label: string; caption: string; flip: () => void; peek: Peek };
 type Stage = ReturnType<typeof buildStage>;
 type Peek = (on: boolean) => void;
 
@@ -143,7 +142,7 @@ function buildWidget(table: HTMLTableElement, pairs: Pair[]) {
   const entry: Widget = {
     root: widget,
     applyMode,
-    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, peek: stage.peek, regions: stage.regions, zoomTo: stage.zoomTo })),
+    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, peek: stage.peek })),
   };
   widgets.add(entry);
   expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -159,37 +158,20 @@ function buildStage(pair: Pair) {
   const beforeTag = tag("Before", "before");
   const afterTag = tag("After", "after");
   const diff = el("div", `${PREFIX}-diff`);
-  // Everything that zooms together; the tags stay put on the frame.
+  // The screenshots and the diff share one grid cell; the tags sit on the frame above them.
   const canvas = el("div", `${PREFIX}-canvas`);
-  const focus = el("div", `${PREFIX}-focus`);
-  focus.hidden = true;
-  canvas.append(after, before, diff, focus);
+  canvas.append(after, before, diff);
   frame.append(canvas, beforeTag, afterTag);
   const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
 
-  const stats = el("p", `${PREFIX}-stats`);
-  stats.hidden = true;
-  root.append(frame, stats);
+  const same = el("p", `${PREFIX}-same`);
+  same.hidden = true;
+  same.textContent = "No visible difference. The same screenshot twice?";
+  root.append(frame, same);
   if (pair.label) {
     const caption = el("figcaption", `${PREFIX}-label`);
     caption.textContent = pair.label;
     root.append(caption);
-  }
-  let regions: Region[] = [];
-
-  // Fills the frame with the region plus a margin, without showing past the canvas edges.
-  function zoomTo(region: Region | null) {
-    focus.hidden = !region;
-    if (!region) {
-      canvas.style.transform = "";
-      return;
-    }
-    const fit = Math.min(1 / (region.w + 2 * ZOOM_MARGIN), 1 / (region.h + 2 * ZOOM_MARGIN));
-    const zoom = Math.min(MAX_ZOOM, Math.max(1, fit));
-    const shift = (start: number, size: number) => Math.min(0, Math.max(1 - zoom, 0.5 - zoom * (start + size / 2)));
-    canvas.style.transform = `translate(${shift(region.x, region.w) * 100}%, ${shift(region.y, region.h) * 100}%) scale(${zoom})`;
-    canvas.style.setProperty("--zoom", String(zoom));
-    Object.assign(focus.style, { left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` });
   }
 
   let mode: Mode = DEFAULT_MODE;
@@ -255,9 +237,7 @@ function buildStage(pair: Pair) {
       peeking = on;
       render();
     },
-    regions: () => regions,
     flip,
-    zoomTo,
     videos: [before, after].filter((media): media is HTMLVideoElement => media instanceof HTMLVideoElement),
     setMode(next: Mode) {
       mode = next;
@@ -265,12 +245,7 @@ function buildStage(pair: Pair) {
     },
   };  // Last, because with cached images (GitHub re-rendering a comment) it runs at once and calls back into
   // the state above.
-  fitPair(root, frame, pair, (counts) => {
-    showStats(stats, counts);
-    regions = counts && counts.regions.length <= MAX_STEPS ? counts.regions : [];
-    zoomTo(null);
-    root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
-  });
+  fitPair(root, frame, pair, (isSame) => (same.hidden = !isSame));
   return stage;
 }
 
@@ -391,17 +366,11 @@ function eachAlignBar(action: (bar: AlignBar) => void) {
 }
 
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
-// `regions` are the separate places that changed, as fractions of the frame, top to bottom.
-type Stats = { changed: number; compared: number; regions: Region[] };
-type Region = { x: number; y: number; w: number; h: number };
-// Past 4x a screenshot's pixels turn to blocks; 2% of the frame each side keeps the region's surroundings in view.
-const MAX_ZOOM = 4, ZOOM_MARGIN = 0.02;
-// Past this many separate places the pair is a different screen or state, not a few edits, and stepping
-// through them one by one is noise; the whole-pair Diff says more.
-const MAX_STEPS = 15;
-type ShowStats = (stats: Stats | null) => void;
+// Diff shows the same blank for "nothing changed" and "the same file uploaded twice", so the background
+// says when no pixel differs and the stage says it outright. Null: not known, say nothing.
+type ShowSame = (same: boolean | null) => void;
 
-function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: ShowStats) {
+function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showSame: ShowSame) {
   let done = false;
   const apply = () => {
     const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
@@ -422,7 +391,7 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: S
       const sameShape = Math.abs((bh * width) / bw - (ah * width) / aw) <= 1;
       if (canAutoAlign(pair) && sameShape) askBackground("compare", pair, (response) => {
         if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
-        showStats(response?.stats ?? null);
+        showSame(response?.same ?? null);
       });
       return;
     }
@@ -435,11 +404,11 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: S
       askBackground("align", pair, (response) => {
         const p = response?.placement as Placement | undefined;
         if (!p || (!p.beforeY && !p.afterY)) return;
-        root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats, { placement: p, diff: response.diff, stats: response.stats }), frame.nextSibling);
+        root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showSame, { placement: p, diff: response.diff, same: response.same }), frame.nextSibling);
       });
       return;
     }
-    root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats), frame.nextSibling);
+    root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showSame), frame.nextSibling);
   };
   for (const media of [pair.before, pair.after]) {
     media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
@@ -459,19 +428,6 @@ function askBackground(type: "align" | "compare", pair: Pair, done: (response: a
   }
 }
 
-// Diff shows the same blank for "nothing changed" and "the same file uploaded twice", so say it outright.
-function showStats(node: HTMLElement, stats: Stats | null) {
-  node.hidden = !stats;
-  if (!stats) return;
-  const same = stats.changed === 0;
-  node.dataset.kind = same ? "same" : "changed";
-  const share = (stats.changed / stats.compared) * 100;
-  const percent = share < 0.1 ? "<0.1" : share < 10 ? share.toFixed(1) : Math.round(share).toString();
-  const scattered = stats.regions.length > MAX_STEPS ? `, in ${stats.regions.length >= 99 ? "99+" : stats.regions.length} places: too scattered to step through` : "";
-  node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed${scattered}`;
-  node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`;
-}
-
 function naturalSize(media: HTMLImageElement | HTMLVideoElement) {
   return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
 }
@@ -489,8 +445,8 @@ function placeOnCanvas(frame: HTMLElement, [bw, bh]: number[], [aw, ah]: number[
 }
 
 // `found` is a crop placement Auto already made for a same-width pair: that bar offers only Auto and Top.
-// Stats belong to Auto's placement, so they show only while Auto is the chosen alignment.
-function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], afterSize: number[], showStats: ShowStats, found?: { placement: Placement; diff: string; stats: Stats }) {
+// "Same" belongs to Auto's placement, so it shows only while Auto is the chosen alignment.
+function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], afterSize: number[], showSame: ShowSame, found?: { placement: Placement; diff: string; same: boolean | null }) {
   const [bw, bh] = beforeSize, [aw, ah] = afterSize;
   const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
   const images = canAutoAlign(pair);
@@ -519,7 +475,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     beforeNarrow ? { beforeX: offset, beforeY: 0, afterX: 0, afterY: 0 } : { beforeX: 0, beforeY: 0, afterX: offset, afterY: 0 });
   let autoPlacement: Placement | null = found?.placement ?? null;
   let autoDiff: string | null = found?.diff ?? null;
-  let autoStats: Stats | null = found?.stats ?? null;
+  let autoSame: boolean | null = found?.same ?? null;
   let shownDiff: string | null = null;
   const showDiff = (url: string | null) => {
     if (url === shownDiff) return;
@@ -532,7 +488,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     askBackground("align", pair, (response) => {
       status.replaceChildren();
       if (response?.placement) {
-        autoPlacement = response.placement; autoDiff = response.diff; autoStats = response.stats; waitingForPermission = false;
+        autoPlacement = response.placement; autoDiff = response.diff; autoSame = response.same; waitingForPermission = false;
         sync();
         return;
       }
@@ -559,7 +515,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
     if (current !== "auto") status.replaceChildren();
     showDiff(current === "auto" ? autoDiff : null);
-    showStats(current === "auto" ? autoStats : null);
+    showSame(current === "auto" ? autoSame : null);
     if (current === "left") placeSideways(0);
     else if (current === "center") placeSideways(slack / 2);
     else if (current === "right") placeSideways(slack);
@@ -616,11 +572,8 @@ let viewer: {
   title: HTMLElement;
   caption: HTMLElement;
   modeButtons: { mode: Mode; button: HTMLButtonElement }[];
-  changes: { group: HTMLElement; label: HTMLElement; key: HTMLElement };
   slides: Slide[];
   index: number;
-  // Which of the current slide's regions is zoomed in, or -1 for the whole pair.
-  change: number;
   placeholder: Comment;
 } | null = null;
 
@@ -645,12 +598,9 @@ function openViewer(start: Slide) {
     return { mode, button };
   });
   segmented.append(...modeButtons.map(({ button }) => button));
-  const changes = el("div", `${PREFIX}-viewer-changes`);
-  const changeLabel = el("span", `${PREFIX}-viewer-counter`);
-  changes.append(navButton("↑", "Previous change (↑)", () => stepChange(-1)), changeLabel, navButton("↓", "Next change (↓)", () => stepChange(1)));
   const close = navButton("✕", "Close (Esc)", closeViewer);
   close.classList.add(`${PREFIX}-viewer-close`);
-  bar.append(previous, counter, next, segmented, changes, close);
+  bar.append(previous, counter, next, segmented, close);
 
   const title = el("div", `${PREFIX}-viewer-title`);
   // The caption sits right under the image, not at the screen's bottom edge, so it reads as the pair's caption.
@@ -659,19 +609,14 @@ function openViewer(start: Slide) {
   const caption = el("p", `${PREFIX}-viewer-caption`);
   column.append(caption);
   body.append(column);
-  const keys = buildKeyHints();
-  overlay.append(bar, title, body, keys.row);
+  overlay.append(bar, title, body, buildKeyHints());
   document.body.append(overlay);
   document.documentElement.classList.add(`${PREFIX}-locked`);
 
-  viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel, key: keys.change }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+  viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("peekaboo") };
   // A clicked button would keep focus and swallow Space, which flips; buttons reached with Tab still take it.
   overlay.addEventListener("mousedown", (event) => {
     if ((event.target as Element).closest("button")) event.preventDefault();
-  });
-  // Regions arrive from the background after the pair is already on screen, or change with the alignment.
-  overlay.addEventListener("peekaboo:regions", (event) => {
-    if (viewer && event.target === viewer.slides[viewer.index]?.stage) showChange(-1);
   });
   if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
   syncViewerModes();
@@ -691,27 +636,7 @@ function showSlide(index: number) {
   viewer.caption.textContent = slide.caption;
   viewer.caption.hidden = !slide.caption;
   viewer.body.classList.toggle(`${PREFIX}-has-caption`, Boolean(slide.caption));
-  showChange(-1);
   slide.stage.querySelector<HTMLElement>(`.${PREFIX}-frame`)?.focus({ preventScroll: true });
-}
-
-// Steps whole pair → change 1 → … → last change → whole pair, so N alone walks a pair and comes back out.
-function stepChange(delta: number) {
-  if (!viewer) return;
-  const count = viewer.slides[viewer.index].regions().length;
-  if (count) showChange(((viewer.change + 1 + delta + count + 1) % (count + 1)) - 1);
-}
-
-function showChange(change: number) {
-  if (!viewer) return;
-  const slide = viewer.slides[viewer.index];
-  const regions = slide.regions();
-  viewer.change = change;
-  slide.zoomTo(regions[change] ?? null);
-  viewer.changes.group.hidden = regions.length === 0;
-  viewer.changes.key.hidden = regions.length === 0;
-  const many = regions.length === 1 ? "1 change" : `${regions.length} changes`;
-  viewer.changes.label.textContent = change < 0 ? many : `${change + 1} of ${many}`;
 }
 
 function stepViewer(delta: number) {
@@ -722,9 +647,7 @@ function stepViewer(delta: number) {
 
 function returnStage() {
   if (!viewer || viewer.index < 0) return;
-  const slide = viewer.slides[viewer.index];
-  slide.zoomTo(null);
-  viewer.placeholder.replaceWith(slide.stage);
+  viewer.placeholder.replaceWith(viewer.slides[viewer.index].stage);
 }
 
 // Modes changed in full screen resized the tables behind it, so land on the pair you were looking at.
@@ -750,8 +673,6 @@ function handleViewerKeys(event: KeyboardEvent) {
   if (event.key === "Escape") closeViewer();
   else if (event.key === "ArrowLeft") stepViewer(-1);
   else if (event.key === "ArrowRight") stepViewer(1);
-  else if (event.key === "ArrowUp") stepChange(-1);
-  else if (event.key === "ArrowDown") stepChange(1);
   else if (VIEWER_MODES[modeIndex]) setModeEverywhere(VIEWER_MODES[modeIndex].mode);
   else if ((event.key === " " || event.key === "Enter") && !(event.target instanceof HTMLButtonElement)) viewer.slides[viewer.index].flip();
   else return;
@@ -790,15 +711,13 @@ function buildKeyHints() {
     for (const key of keys) item.append(Object.assign(el("kbd", ""), { textContent: key }));
     item.append(` ${action}`);
     row.append(item);
-    return item;
   };
   hint(["←", "→"], "pair");
-  const change = hint(["↑", "↓"], "change");
   hint(["Space"], "flip");
   hint(["Shift"], "hold to peek");
   hint(VIEWER_MODES.map((_, index) => String(index + 1)), VIEWER_MODES.map(({ label }) => label).join(" / "));
   hint(["Esc"], "close");
-  return { row, change };
+  return row;
 }
 
 function navButton(text: string, title: string, onClick: () => void) {
@@ -873,13 +792,7 @@ function injectStyles() {
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
-.${PREFIX}-canvas { grid-area: 1 / 1; display: grid; position: relative; transform-origin: 0 0; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-@media (prefers-reduced-motion: reduce) { .${PREFIX}-canvas { transition: none; } }
-/* Drawn inside the zoomed canvas, so line widths divide by the zoom to stay 2px on screen. */
-.${PREFIX}-focus {
-  position: absolute; pointer-events: none; border-radius: calc(4px / var(--zoom, 1));
-  outline: calc(2px / var(--zoom, 1)) solid var(--fgColor-accent, #0969da); outline-offset: calc(4px / var(--zoom, 1));
-}
+.${PREFIX}-canvas { grid-area: 1 / 1; display: grid; position: relative; }
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 .${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
 .${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
@@ -905,8 +818,7 @@ function injectStyles() {
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }
-.${PREFIX}-stats { margin: 0; font-size: 12px; color: var(--fgColor-muted, #59636e); }
-.${PREFIX}-stats[data-kind="same"] { color: var(--fgColor-attention, #9a6700); font-weight: 600; }
+.${PREFIX}-same { margin: 0; font-size: 12px; color: var(--fgColor-attention, #9a6700); font-weight: 600; }
 
 .${PREFIX}-locked { overflow: hidden; }
 .${PREFIX}-viewer {
@@ -930,8 +842,6 @@ function injectStyles() {
   border: 1px solid var(--borderColor-default, #d1d9e0); border-bottom-width: 2px; border-radius: 4px;
   background: var(--bgColor-muted, #f6f8fa); color: var(--fgColor-default, #1f2328);
 }
-.${PREFIX}-viewer-changes { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
-.${PREFIX}-viewer-changes .${PREFIX}-viewer-counter { min-width: 96px; }
 .${PREFIX}-viewer-close { margin-left: auto; font-size: 14px; }
 .${PREFIX}-viewer-title { font-weight: 600; text-align: center; }
 .${PREFIX}-viewer-column { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
@@ -944,8 +854,8 @@ function injectStyles() {
 .${PREFIX}-viewer-body .${PREFIX}-stage { align-items: center; width: 100%; }
 .${PREFIX}-viewer-body .${PREFIX}-label { display: none; }
 /* Full screen fills the space, upscaling small crops: sized from the viewer's own box, not vh, so page zoom can't overflow it. */
-.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px) - var(--stats-room, 0px)) * var(--aspect, 1.6))); }
-.${PREFIX}-viewer-body:has(.${PREFIX}-stats:not([hidden])) { --stats-room: 24px; }
+.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px) - var(--same-room, 0px)) * var(--aspect, 1.6))); }
+.${PREFIX}-viewer-body:has(.${PREFIX}-same:not([hidden])) { --same-room: 24px; }
 /* Room for up to three caption lines, so the image shrinks instead of pushing the caption off screen. */
 .${PREFIX}-has-caption { --caption-room: 92px; }
 `;

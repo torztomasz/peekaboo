@@ -100,7 +100,7 @@
     const entry = {
       root: widget,
       applyMode,
-      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, peek: stage.peek, regions: stage.regions, zoomTo: stage.zoomTo }))
+      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, peek: stage.peek }))
     };
     widgets.add(entry);
     expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -116,32 +116,17 @@
     const afterTag = tag("After", "after");
     const diff = el("div", `${PREFIX}-diff`);
     const canvas = el("div", `${PREFIX}-canvas`);
-    const focus = el("div", `${PREFIX}-focus`);
-    focus.hidden = true;
-    canvas.append(after, before, diff, focus);
+    canvas.append(after, before, diff);
     frame.append(canvas, beforeTag, afterTag);
     const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
-    const stats = el("p", `${PREFIX}-stats`);
-    stats.hidden = true;
-    root.append(frame, stats);
+    const same = el("p", `${PREFIX}-same`);
+    same.hidden = true;
+    same.textContent = "No visible difference. The same screenshot twice?";
+    root.append(frame, same);
     if (pair.label) {
       const caption = el("figcaption", `${PREFIX}-label`);
       caption.textContent = pair.label;
       root.append(caption);
-    }
-    let regions = [];
-    function zoomTo(region) {
-      focus.hidden = !region;
-      if (!region) {
-        canvas.style.transform = "";
-        return;
-      }
-      const fit = Math.min(1 / (region.w + 2 * ZOOM_MARGIN), 1 / (region.h + 2 * ZOOM_MARGIN));
-      const zoom = Math.min(MAX_ZOOM, Math.max(1, fit));
-      const shift = (start, size) => Math.min(0, Math.max(1 - zoom, 0.5 - zoom * (start + size / 2)));
-      canvas.style.transform = `translate(${shift(region.x, region.w) * 100}%, ${shift(region.y, region.h) * 100}%) scale(${zoom})`;
-      canvas.style.setProperty("--zoom", String(zoom));
-      Object.assign(focus.style, { left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` });
     }
     let mode = DEFAULT_MODE;
     let showingBefore = true;
@@ -199,21 +184,14 @@
         peeking = on;
         render();
       },
-      regions: () => regions,
       flip,
-      zoomTo,
       videos: [before, after].filter((media) => media instanceof HTMLVideoElement),
       setMode(next) {
         mode = next;
         render();
       }
     };
-    fitPair(root, frame, pair, (counts) => {
-      showStats(stats, counts);
-      regions = counts && counts.regions.length <= MAX_STEPS ? counts.regions : [];
-      zoomTo(null);
-      root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
-    });
+    fitPair(root, frame, pair, (isSame) => same.hidden = !isSame);
     return stage;
   }
   var hovered = null;
@@ -291,10 +269,7 @@
       else alignBars.delete(frame);
     }
   }
-  var MAX_ZOOM = 4;
-  var ZOOM_MARGIN = 0.02;
-  var MAX_STEPS = 15;
-  function fitPair(root, frame, pair, showStats2) {
+  function fitPair(root, frame, pair, showSame) {
     let done = false;
     const apply = () => {
       const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
@@ -312,7 +287,7 @@
         const sameShape = Math.abs(bh * width / bw - ah * width / aw) <= 1;
         if (canAutoAlign(pair) && sameShape) askBackground("compare", pair, (response) => {
           if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
-          showStats2(response?.stats ?? null);
+          showSame(response?.same ?? null);
         });
         return;
       }
@@ -323,11 +298,11 @@
         askBackground("align", pair, (response) => {
           const p = response?.placement;
           if (!p || !p.beforeY && !p.afterY) return;
-          root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats2, { placement: p, diff: response.diff, stats: response.stats }), frame.nextSibling);
+          root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showSame, { placement: p, diff: response.diff, same: response.same }), frame.nextSibling);
         });
         return;
       }
-      root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats2), frame.nextSibling);
+      root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showSame), frame.nextSibling);
     };
     for (const media of [pair.before, pair.after]) {
       media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
@@ -342,17 +317,6 @@
     } catch {
       done(null);
     }
-  }
-  function showStats(node, stats) {
-    node.hidden = !stats;
-    if (!stats) return;
-    const same = stats.changed === 0;
-    node.dataset.kind = same ? "same" : "changed";
-    const share = stats.changed / stats.compared * 100;
-    const percent = share < 0.1 ? "<0.1" : share < 10 ? share.toFixed(1) : Math.round(share).toString();
-    const scattered = stats.regions.length > MAX_STEPS ? `, in ${stats.regions.length >= 99 ? "99+" : stats.regions.length} places: too scattered to step through` : "";
-    node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed${scattered}`;
-    node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`;
   }
   function naturalSize(media) {
     return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
@@ -369,7 +333,7 @@
     frame.style.setProperty("--before-y", pct(p.beforeY));
     frame.style.setProperty("--after-y", pct(p.afterY));
   }
-  function buildAlignBar(frame, pair, beforeSize, afterSize, showStats2, found) {
+  function buildAlignBar(frame, pair, beforeSize, afterSize, showSame, found) {
     const [bw, bh] = beforeSize, [aw, ah] = afterSize;
     const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
     const images = canAutoAlign(pair);
@@ -402,7 +366,7 @@
     );
     let autoPlacement = found?.placement ?? null;
     let autoDiff = found?.diff ?? null;
-    let autoStats = found?.stats ?? null;
+    let autoSame = found?.same ?? null;
     let shownDiff = null;
     const showDiff = (url) => {
       if (url === shownDiff) return;
@@ -417,7 +381,7 @@
         if (response?.placement) {
           autoPlacement = response.placement;
           autoDiff = response.diff;
-          autoStats = response.stats;
+          autoSame = response.same;
           waitingForPermission = false;
           sync2();
           return;
@@ -445,7 +409,7 @@
       for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
       if (current !== "auto") status.replaceChildren();
       showDiff(current === "auto" ? autoDiff : null);
-      showStats2(current === "auto" ? autoStats : null);
+      showSame(current === "auto" ? autoSame : null);
       if (current === "left") placeSideways(0);
       else if (current === "center") placeSideways(slack / 2);
       else if (current === "right") placeSideways(slack);
@@ -508,28 +472,21 @@
       return { mode, button };
     });
     segmented.append(...modeButtons.map(({ button }) => button));
-    const changes = el("div", `${PREFIX}-viewer-changes`);
-    const changeLabel = el("span", `${PREFIX}-viewer-counter`);
-    changes.append(navButton("\u2191", "Previous change (\u2191)", () => stepChange(-1)), changeLabel, navButton("\u2193", "Next change (\u2193)", () => stepChange(1)));
     const close = navButton("\u2715", "Close (Esc)", closeViewer);
     close.classList.add(`${PREFIX}-viewer-close`);
-    bar.append(previous, counter, next, segmented, changes, close);
+    bar.append(previous, counter, next, segmented, close);
     const title = el("div", `${PREFIX}-viewer-title`);
     const body = el("div", `${PREFIX}-viewer-body`);
     const column = el("div", `${PREFIX}-viewer-column`);
     const caption = el("p", `${PREFIX}-viewer-caption`);
     column.append(caption);
     body.append(column);
-    const keys = buildKeyHints();
-    overlay.append(bar, title, body, keys.row);
+    overlay.append(bar, title, body, buildKeyHints());
     document.body.append(overlay);
     document.documentElement.classList.add(`${PREFIX}-locked`);
-    viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel, key: keys.change }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+    viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("peekaboo") };
     overlay.addEventListener("mousedown", (event) => {
       if (event.target.closest("button")) event.preventDefault();
-    });
-    overlay.addEventListener("peekaboo:regions", (event) => {
-      if (viewer && event.target === viewer.slides[viewer.index]?.stage) showChange(-1);
     });
     if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
     syncViewerModes();
@@ -548,24 +505,7 @@
     viewer.caption.textContent = slide.caption;
     viewer.caption.hidden = !slide.caption;
     viewer.body.classList.toggle(`${PREFIX}-has-caption`, Boolean(slide.caption));
-    showChange(-1);
     slide.stage.querySelector(`.${PREFIX}-frame`)?.focus({ preventScroll: true });
-  }
-  function stepChange(delta) {
-    if (!viewer) return;
-    const count = viewer.slides[viewer.index].regions().length;
-    if (count) showChange((viewer.change + 1 + delta + count + 1) % (count + 1) - 1);
-  }
-  function showChange(change) {
-    if (!viewer) return;
-    const slide = viewer.slides[viewer.index];
-    const regions = slide.regions();
-    viewer.change = change;
-    slide.zoomTo(regions[change] ?? null);
-    viewer.changes.group.hidden = regions.length === 0;
-    viewer.changes.key.hidden = regions.length === 0;
-    const many = regions.length === 1 ? "1 change" : `${regions.length} changes`;
-    viewer.changes.label.textContent = change < 0 ? many : `${change + 1} of ${many}`;
   }
   function stepViewer(delta) {
     if (!viewer) return;
@@ -574,9 +514,7 @@
   }
   function returnStage() {
     if (!viewer || viewer.index < 0) return;
-    const slide = viewer.slides[viewer.index];
-    slide.zoomTo(null);
-    viewer.placeholder.replaceWith(slide.stage);
+    viewer.placeholder.replaceWith(viewer.slides[viewer.index].stage);
   }
   function closeViewer() {
     if (!viewer) return;
@@ -598,8 +536,6 @@
     if (event.key === "Escape") closeViewer();
     else if (event.key === "ArrowLeft") stepViewer(-1);
     else if (event.key === "ArrowRight") stepViewer(1);
-    else if (event.key === "ArrowUp") stepChange(-1);
-    else if (event.key === "ArrowDown") stepChange(1);
     else if (VIEWER_MODES[modeIndex]) setModeEverywhere(VIEWER_MODES[modeIndex].mode);
     else if ((event.key === " " || event.key === "Enter") && !(event.target instanceof HTMLButtonElement)) viewer.slides[viewer.index].flip();
     else return;
@@ -627,15 +563,13 @@
       for (const key of keys) item.append(Object.assign(el("kbd", ""), { textContent: key }));
       item.append(` ${action}`);
       row.append(item);
-      return item;
     };
     hint(["\u2190", "\u2192"], "pair");
-    const change = hint(["\u2191", "\u2193"], "change");
     hint(["Space"], "flip");
     hint(["Shift"], "hold to peek");
     hint(VIEWER_MODES.map((_, index) => String(index + 1)), VIEWER_MODES.map(({ label }) => label).join(" / "));
     hint(["Esc"], "close");
-    return { row, change };
+    return row;
   }
   function navButton(text, title, onClick) {
     const button = el("button", `${PREFIX}-nav`);
@@ -701,13 +635,7 @@
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
-.${PREFIX}-canvas { grid-area: 1 / 1; display: grid; position: relative; transform-origin: 0 0; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-@media (prefers-reduced-motion: reduce) { .${PREFIX}-canvas { transition: none; } }
-/* Drawn inside the zoomed canvas, so line widths divide by the zoom to stay 2px on screen. */
-.${PREFIX}-focus {
-  position: absolute; pointer-events: none; border-radius: calc(4px / var(--zoom, 1));
-  outline: calc(2px / var(--zoom, 1)) solid var(--fgColor-accent, #0969da); outline-offset: calc(4px / var(--zoom, 1));
-}
+.${PREFIX}-canvas { grid-area: 1 / 1; display: grid; position: relative; }
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 .${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
 .${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
@@ -733,8 +661,7 @@
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }
-.${PREFIX}-stats { margin: 0; font-size: 12px; color: var(--fgColor-muted, #59636e); }
-.${PREFIX}-stats[data-kind="same"] { color: var(--fgColor-attention, #9a6700); font-weight: 600; }
+.${PREFIX}-same { margin: 0; font-size: 12px; color: var(--fgColor-attention, #9a6700); font-weight: 600; }
 
 .${PREFIX}-locked { overflow: hidden; }
 .${PREFIX}-viewer {
@@ -758,8 +685,6 @@
   border: 1px solid var(--borderColor-default, #d1d9e0); border-bottom-width: 2px; border-radius: 4px;
   background: var(--bgColor-muted, #f6f8fa); color: var(--fgColor-default, #1f2328);
 }
-.${PREFIX}-viewer-changes { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
-.${PREFIX}-viewer-changes .${PREFIX}-viewer-counter { min-width: 96px; }
 .${PREFIX}-viewer-close { margin-left: auto; font-size: 14px; }
 .${PREFIX}-viewer-title { font-weight: 600; text-align: center; }
 .${PREFIX}-viewer-column { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
@@ -772,8 +697,8 @@
 .${PREFIX}-viewer-body .${PREFIX}-stage { align-items: center; width: 100%; }
 .${PREFIX}-viewer-body .${PREFIX}-label { display: none; }
 /* Full screen fills the space, upscaling small crops: sized from the viewer's own box, not vh, so page zoom can't overflow it. */
-.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px) - var(--stats-room, 0px)) * var(--aspect, 1.6))); }
-.${PREFIX}-viewer-body:has(.${PREFIX}-stats:not([hidden])) { --stats-room: 24px; }
+.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px) - var(--same-room, 0px)) * var(--aspect, 1.6))); }
+.${PREFIX}-viewer-body:has(.${PREFIX}-same:not([hidden])) { --same-room: 24px; }
 /* Room for up to three caption lines, so the image shrinks instead of pushing the caption off screen. */
 .${PREFIX}-has-caption { --caption-room: 92px; }
 `;
