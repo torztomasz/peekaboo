@@ -114,13 +114,15 @@
     const diff = el("div", `${PREFIX}-diff`);
     frame.append(after, before, diff, beforeTag, afterTag);
     const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
-    root.append(frame);
+    const stats = el("p", `${PREFIX}-stats`);
+    stats.hidden = true;
+    root.append(frame, stats);
     if (pair.label) {
       const caption = el("figcaption", `${PREFIX}-label`);
       caption.textContent = pair.label;
       root.append(caption);
     }
-    fitPair(root, frame, pair);
+    fitPair(root, frame, pair, (counts) => showStats(stats, counts));
     let mode = DEFAULT_MODE;
     let showingBefore = true;
     function render() {
@@ -231,7 +233,7 @@
       else alignBars.delete(frame);
     }
   }
-  function fitPair(root, frame, pair) {
+  function fitPair(root, frame, pair, showStats2) {
     let done = false;
     const apply = () => {
       const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
@@ -244,20 +246,21 @@
       if (sameSize || density) {
         frame.style.setProperty("--natural-width", `${aw}px`);
         frame.style.setProperty("--aspect", String(aw / ah));
+        if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, (response) => showStats2(response?.stats ?? null));
         return;
       }
       if (bw === aw) {
         frame.style.setProperty("--natural-width", `${aw}px`);
         frame.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
         if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
-        requestAlign(pair, (response) => {
+        askBackground("align", pair, (response) => {
           const p = response?.placement;
           if (!p || !p.beforeY && !p.afterY) return;
-          root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], { placement: p, diff: response.diff }), frame.nextSibling);
+          root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats2, { placement: p, diff: response.diff, stats: response.stats }), frame.nextSibling);
         });
         return;
       }
-      root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah]), frame.nextSibling);
+      root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats2), frame.nextSibling);
     };
     for (const media of [pair.before, pair.after]) {
       media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
@@ -265,8 +268,23 @@
     apply();
   }
   var canAutoAlign = (pair) => CAN_AUTO && pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
-  function requestAlign(pair, done) {
-    chrome.runtime.sendMessage({ type: "align", before: pair.before.currentSrc, after: pair.after.currentSrc }, done);
+  function askBackground(type, pair, done) {
+    const message = { type, before: pair.before.currentSrc, after: pair.after.currentSrc };
+    try {
+      chrome.runtime.sendMessage(message, (response) => done(chrome.runtime.lastError ? null : response));
+    } catch {
+      done(null);
+    }
+  }
+  function showStats(node, stats) {
+    node.hidden = !stats;
+    if (!stats) return;
+    const same = stats.changed === 0;
+    node.dataset.kind = same ? "same" : "changed";
+    const share = stats.changed / stats.compared * 100;
+    const percent = share < 0.1 ? "<0.1" : share < 10 ? share.toFixed(1) : Math.round(share).toString();
+    node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed`;
+    node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`;
   }
   function naturalSize(media) {
     return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
@@ -283,7 +301,7 @@
     frame.style.setProperty("--before-y", pct(p.beforeY));
     frame.style.setProperty("--after-y", pct(p.afterY));
   }
-  function buildAlignBar(frame, pair, beforeSize, afterSize, found) {
+  function buildAlignBar(frame, pair, beforeSize, afterSize, showStats2, found) {
     const [bw, bh] = beforeSize, [aw, ah] = afterSize;
     const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
     const images = canAutoAlign(pair);
@@ -316,6 +334,7 @@
     );
     let autoPlacement = found?.placement ?? null;
     let autoDiff = found?.diff ?? null;
+    let autoStats = found?.stats ?? null;
     let shownDiff = null;
     const showDiff = (url) => {
       if (url === shownDiff) return;
@@ -325,11 +344,12 @@
     let waitingForPermission = false;
     const runAuto = () => {
       status.textContent = "Lining up\u2026";
-      requestAlign(pair, (response) => {
+      askBackground("align", pair, (response) => {
         status.replaceChildren();
         if (response?.placement) {
           autoPlacement = response.placement;
           autoDiff = response.diff;
+          autoStats = response.stats;
           waitingForPermission = false;
           sync2();
           return;
@@ -357,6 +377,7 @@
       for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
       if (current !== "auto") status.replaceChildren();
       showDiff(current === "auto" ? autoDiff : null);
+      showStats2(current === "auto" ? autoStats : null);
       if (current === "left") placeSideways(0);
       else if (current === "center") placeSideways(slack / 2);
       else if (current === "right") placeSideways(slack);
@@ -586,6 +607,8 @@
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-stats { margin: 0; font-size: 12px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-stats[data-kind="same"] { color: var(--fgColor-attention, #9a6700); font-weight: 600; }
 
 .${PREFIX}-locked { overflow: hidden; }
 .${PREFIX}-viewer {
@@ -613,7 +636,8 @@
 .${PREFIX}-viewer-body .${PREFIX}-stage { align-items: center; width: 100%; }
 .${PREFIX}-viewer-body .${PREFIX}-label { display: none; }
 /* Full screen fills the space, upscaling small crops: sized from the viewer's own box, not vh, so page zoom can't overflow it. */
-.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px)) * var(--aspect, 1.6))); }
+.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px) - var(--stats-room, 0px)) * var(--aspect, 1.6))); }
+.${PREFIX}-viewer-body:has(.${PREFIX}-stats:not([hidden])) { --stats-room: 24px; }
 /* Room for up to three caption lines, so the image shrinks instead of pushing the caption off screen. */
 .${PREFIX}-has-caption { --caption-room: 92px; }
 `;

@@ -39,8 +39,9 @@
 
   // src/background.ts
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
-    if (message?.type === "align") {
-      findOffset(message).then(reply, (error) => reply({ error: String(error) }));
+    if (message?.type === "align" || message?.type === "compare") {
+      const work = message.type === "align" ? findOffset(message) : compare(message);
+      work.then(reply, (error) => reply({ error: String(error) }));
       return true;
     }
     if (message?.type === "open-options") openSettings(_sender.tab);
@@ -75,7 +76,15 @@
       const dx = slideSideways(beforeIsWide ? b : a, beforeIsWide ? a : b);
       placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
     }
-    return { placement, diff: await diffImage(b, a, placement) };
+    const changes = changeMaps(b, a, placement);
+    return { placement, diff: await diffImage(changes), stats: changes.stats };
+  }
+  var AS_IS = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
+  async function compare({ before, after }) {
+    if (!await chrome.permissions.contains({ origins: IMAGE_ORIGINS })) return { needsPermission: true };
+    const [b, a] = await Promise.all([load(before), load(after)]);
+    if (b.width !== a.width || b.height !== a.height) return { error: "sizes differ" };
+    return { stats: changeMaps(b, a, AS_IS).stats };
   }
   function slideSideways(wide, narrow) {
     const slack = wide.width - narrow.width;
@@ -125,16 +134,17 @@
   }
   var REMOVED = [219, 36, 46];
   var ADDED = [26, 184, 77];
-  async function diffImage(before, after, { beforeX, beforeY, afterX, afterY }) {
+  function changeMaps(before, after, { beforeX, beforeY, afterX, afterY }) {
     const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height + beforeY, after.height + afterY);
     const pixels = (bitmap) => {
-      const canvas2 = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const context = canvas2.getContext("2d");
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const context = canvas.getContext("2d");
       context.drawImage(bitmap, 0, 0);
       return context.getImageData(0, 0, bitmap.width, bitmap.height).data;
     };
     const b = pixels(before), a = pixels(after);
     const removed = new Float32Array(width * height), added = new Float32Array(width * height);
+    const stats = { changed: 0, compared: 0 };
     for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
       for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
         const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
@@ -144,10 +154,16 @@
           if (d > 0) lighterAfter += d;
           else lighterBefore -= d;
         }
-        removed[y * width + x] = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06));
-        added[y * width + x] = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
+        const r = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06)), g = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
+        removed[y * width + x] = r;
+        added[y * width + x] = g;
+        stats.compared++;
+        if (r > 0 || g > 0) stats.changed++;
       }
     }
+    return { removed, added, width, height, stats };
+  }
+  async function diffImage({ removed, added, width, height }) {
     const out = new ImageData(width, height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {

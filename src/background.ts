@@ -5,13 +5,17 @@
 import { IMAGE_ORIGINS } from "./origins";
 import { FULL_SIZE_ROWS, type Gray, locate } from "./match";
 
-type AlignRequest = { type: "align"; before: string; after: string };
+type PairRequest = { type: "align" | "compare"; before: string; after: string };
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
-type AlignResponse = { placement: Placement; diff: string } | { needsPermission: true } | { error: string };
+// `changed` of `compared` pixels differ visibly (by the same rule that colours the diff).
+type Stats = { changed: number; compared: number };
+type AlignResponse = { placement: Placement; diff: string; stats: Stats } | { needsPermission: true } | { error: string };
+type CompareResponse = { stats: Stats } | { needsPermission: true } | { error: string };
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
-  if (message?.type === "align") {
-    findOffset(message as AlignRequest).then(reply, (error) => reply({ error: String(error) }));
+  if (message?.type === "align" || message?.type === "compare") {
+    const work = message.type === "align" ? findOffset(message as PairRequest) : compare(message as PairRequest);
+    work.then(reply, (error) => reply({ error: String(error) }));
     return true;
   }
   if (message?.type === "open-options") openSettings(_sender.tab);
@@ -38,7 +42,7 @@ function openSettings(tab?: chrome.tabs.Tab) {
 // two window widths of one page: top-aligned, the narrower slid sideways to where the two match best.
 const CONTAINED_MAX_ERROR = 6;
 
-async function findOffset({ before, after }: AlignRequest): Promise<AlignResponse> {
+async function findOffset({ before, after }: PairRequest): Promise<AlignResponse> {
   if (!(await chrome.permissions.contains({ origins: IMAGE_ORIGINS }))) return { needsPermission: true };
   const [b, a] = await Promise.all([load(before), load(after)]);
   const fits = (outer: ImageBitmap, inner: ImageBitmap) => outer.width >= inner.width && outer.height >= inner.height;
@@ -55,7 +59,19 @@ async function findOffset({ before, after }: AlignRequest): Promise<AlignRespons
     const dx = slideSideways(beforeIsWide ? b : a, beforeIsWide ? a : b);
     placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
   }
-  return { placement, diff: await diffImage(b, a, placement) };
+  const changes = changeMaps(b, a, placement);
+  return { placement, diff: await diffImage(changes), stats: changes.stats };
+}
+
+// Same-size pairs line up as they are, so the page only needs to know how much changed. It's the cheap
+// way to catch the same screenshot uploaded twice, which Diff would show as a reassuring blank.
+const AS_IS: Placement = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
+
+async function compare({ before, after }: PairRequest): Promise<CompareResponse> {
+  if (!(await chrome.permissions.contains({ origins: IMAGE_ORIGINS }))) return { needsPermission: true };
+  const [b, a] = await Promise.all([load(before), load(after)]);
+  if (b.width !== a.width || b.height !== a.height) return { error: "sizes differ" };
+  return { stats: changeMaps(b, a, AS_IS).stats };
 }
 
 function slideSideways(wide: ImageBitmap, narrow: ImageBitmap) {
@@ -111,7 +127,9 @@ function bestOffset(wide: Gray, narrow: Gray, slack: number, overhang: number, f
 // 1px); pixels only one screenshot covers stay clear, since there is nothing to compare them with.
 const REMOVED = [219, 36, 46], ADDED = [26, 184, 77];
 
-async function diffImage(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY, afterX, afterY }: Placement) {
+type ChangeMaps = { removed: Float32Array; added: Float32Array; width: number; height: number; stats: Stats };
+
+function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY, afterX, afterY }: Placement): ChangeMaps {
   const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height + beforeY, after.height + afterY);
   const pixels = (bitmap: ImageBitmap) => {
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
@@ -121,6 +139,7 @@ async function diffImage(before: ImageBitmap, after: ImageBitmap, { beforeX, bef
   };
   const b = pixels(before), a = pixels(after);
   const removed = new Float32Array(width * height), added = new Float32Array(width * height);
+  const stats: Stats = { changed: 0, compared: 0 };
   for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
     for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
       const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
@@ -129,10 +148,17 @@ async function diffImage(before: ImageBitmap, after: ImageBitmap, { beforeX, bef
         const d = (a[ai + c] - b[bi + c]) / 255;
         if (d > 0) lighterAfter += d; else lighterBefore -= d;
       }
-      removed[y * width + x] = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06));
-      added[y * width + x] = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
+      const r = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06)), g = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
+      removed[y * width + x] = r;
+      added[y * width + x] = g;
+      stats.compared++;
+      if (r > 0 || g > 0) stats.changed++;
     }
   }
+  return { removed, added, width, height, stats };
+}
+
+async function diffImage({ removed, added, width, height }: ChangeMaps) {
   const out = new ImageData(width, height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {

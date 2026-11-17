@@ -156,13 +156,15 @@ function buildStage(pair: Pair) {
   frame.append(after, before, diff, beforeTag, afterTag);
   const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
 
-  root.append(frame);
+  const stats = el("p", `${PREFIX}-stats`);
+  stats.hidden = true;
+  root.append(frame, stats);
   if (pair.label) {
     const caption = el("figcaption", `${PREFIX}-label`);
     caption.textContent = pair.label;
     root.append(caption);
   }
-  fitPair(root, frame, pair);
+  fitPair(root, frame, pair, (counts) => showStats(stats, counts));
 
   let mode: Mode = DEFAULT_MODE;
   let showingBefore = true;
@@ -312,8 +314,10 @@ function eachAlignBar(action: (bar: AlignBar) => void) {
 }
 
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
+type Stats = { changed: number; compared: number };
+type ShowStats = (stats: Stats | null) => void;
 
-function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
+function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: ShowStats) {
   let done = false;
   const apply = () => {
     const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
@@ -326,6 +330,7 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
     if (sameSize || density) {
       frame.style.setProperty("--natural-width", `${aw}px`);
       frame.style.setProperty("--aspect", String(aw / ah));
+      if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, (response) => showStats(response?.stats ?? null));
       return;
     }
     // Same width, different heights: usually a page that got longer or shorter, so top-aligned is right
@@ -334,14 +339,14 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
       frame.style.setProperty("--natural-width", `${aw}px`);
       frame.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
       if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
-      requestAlign(pair, (response) => {
+      askBackground("align", pair, (response) => {
         const p = response?.placement as Placement | undefined;
         if (!p || (!p.beforeY && !p.afterY)) return;
-        root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], { placement: p, diff: response.diff }), frame.nextSibling);
+        root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats, { placement: p, diff: response.diff, stats: response.stats }), frame.nextSibling);
       });
       return;
     }
-    root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah]), frame.nextSibling);
+    root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats), frame.nextSibling);
   };
   for (const media of [pair.before, pair.after]) {
     media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
@@ -351,8 +356,26 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair) {
 
 const canAutoAlign = (pair: Pair) => CAN_AUTO && pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
 
-function requestAlign(pair: Pair, done: (response: any) => void) {
-  chrome.runtime.sendMessage({ type: "align", before: (pair.before as HTMLImageElement).currentSrc, after: (pair.after as HTMLImageElement).currentSrc }, done);
+// Reading lastError keeps Chrome from logging every failure (e.g. after the extension was reloaded) as unchecked.
+function askBackground(type: "align" | "compare", pair: Pair, done: (response: any) => void) {
+  const message = { type, before: (pair.before as HTMLImageElement).currentSrc, after: (pair.after as HTMLImageElement).currentSrc };
+  try {
+    chrome.runtime.sendMessage(message, (response) => done(chrome.runtime.lastError ? null : response));
+  } catch {
+    done(null);
+  }
+}
+
+// Diff shows the same blank for "nothing changed" and "the same file uploaded twice", so say it outright.
+function showStats(node: HTMLElement, stats: Stats | null) {
+  node.hidden = !stats;
+  if (!stats) return;
+  const same = stats.changed === 0;
+  node.dataset.kind = same ? "same" : "changed";
+  const share = (stats.changed / stats.compared) * 100;
+  const percent = share < 0.1 ? "<0.1" : share < 10 ? share.toFixed(1) : Math.round(share).toString();
+  node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed`;
+  node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`;
 }
 
 function naturalSize(media: HTMLImageElement | HTMLVideoElement) {
@@ -372,7 +395,8 @@ function placeOnCanvas(frame: HTMLElement, [bw, bh]: number[], [aw, ah]: number[
 }
 
 // `found` is a crop placement Auto already made for a same-width pair: that bar offers only Auto and Top.
-function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], afterSize: number[], found?: { placement: Placement; diff: string }) {
+// Stats belong to Auto's placement, so they show only while Auto is the chosen alignment.
+function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], afterSize: number[], showStats: ShowStats, found?: { placement: Placement; diff: string; stats: Stats }) {
   const [bw, bh] = beforeSize, [aw, ah] = afterSize;
   const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
   const images = canAutoAlign(pair);
@@ -401,6 +425,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     beforeNarrow ? { beforeX: offset, beforeY: 0, afterX: 0, afterY: 0 } : { beforeX: 0, beforeY: 0, afterX: offset, afterY: 0 });
   let autoPlacement: Placement | null = found?.placement ?? null;
   let autoDiff: string | null = found?.diff ?? null;
+  let autoStats: Stats | null = found?.stats ?? null;
   let shownDiff: string | null = null;
   const showDiff = (url: string | null) => {
     if (url === shownDiff) return;
@@ -410,10 +435,10 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
   let waitingForPermission = false;
   const runAuto = () => {
     status.textContent = "Lining up…";
-    requestAlign(pair, (response) => {
+    askBackground("align", pair, (response) => {
       status.replaceChildren();
       if (response?.placement) {
-        autoPlacement = response.placement; autoDiff = response.diff; waitingForPermission = false;
+        autoPlacement = response.placement; autoDiff = response.diff; autoStats = response.stats; waitingForPermission = false;
         sync();
         return;
       }
@@ -440,6 +465,7 @@ function buildAlignBar(frame: HTMLElement, pair: Pair, beforeSize: number[], aft
     for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
     if (current !== "auto") status.replaceChildren();
     showDiff(current === "auto" ? autoDiff : null);
+    showStats(current === "auto" ? autoStats : null);
     if (current === "left") placeSideways(0);
     else if (current === "center") placeSideways(slack / 2);
     else if (current === "right") placeSideways(slack);
@@ -717,6 +743,8 @@ function injectStyles() {
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-stats { margin: 0; font-size: 12px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-stats[data-kind="same"] { color: var(--fgColor-attention, #9a6700); font-weight: 600; }
 
 .${PREFIX}-locked { overflow: hidden; }
 .${PREFIX}-viewer {
@@ -744,7 +772,8 @@ function injectStyles() {
 .${PREFIX}-viewer-body .${PREFIX}-stage { align-items: center; width: 100%; }
 .${PREFIX}-viewer-body .${PREFIX}-label { display: none; }
 /* Full screen fills the space, upscaling small crops: sized from the viewer's own box, not vh, so page zoom can't overflow it. */
-.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px)) * var(--aspect, 1.6))); }
+.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px) - var(--stats-room, 0px)) * var(--aspect, 1.6))); }
+.${PREFIX}-viewer-body:has(.${PREFIX}-stats:not([hidden])) { --stats-room: 24px; }
 /* Room for up to three caption lines, so the image shrinks instead of pushing the caption off screen. */
 .${PREFIX}-has-caption { --caption-room: 92px; }
 `;
