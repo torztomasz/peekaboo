@@ -251,13 +251,12 @@
     svg.id = `${PREFIX}-filters`;
     svg.setAttribute("aria-hidden", "true");
     svg.setAttribute("style", "position:absolute;width:0;height:0;overflow:hidden");
-    svg.innerHTML = Object.entries(DIFF_COLORS).map(
-      ([kind, [r, g, b]]) => `
-    <filter id="${PREFIX}-${kind}" color-interpolation-filters="sRGB">
+    const morphs = { "": `<feMorphology operator="dilate" radius="1" />`, "-resampled": `<feMorphology operator="erode" radius="1" /><feMorphology operator="dilate" radius="2" />` };
+    svg.innerHTML = Object.entries(DIFF_COLORS).flatMap(([kind, [r, g, b]]) => Object.entries(morphs).map(([suffix, steps]) => `
+    <filter id="${PREFIX}-${kind}${suffix}" color-interpolation-filters="sRGB">
       <feColorMatrix type="matrix" values="0 0 0 0 ${r}  0 0 0 0 ${g}  0 0 0 0 ${b}  6 6 6 0 -0.06" />
-      <feMorphology operator="dilate" radius="1" />
-    </filter>`
-    ).join("");
+      ${steps}
+    </filter>`)).join("");
     document.body.append(svg);
   }
   function cloneMedia(source, side, from = side) {
@@ -308,7 +307,11 @@
       if (sameSize || density) {
         frame.style.setProperty("--natural-width", `${aw}px`);
         frame.style.setProperty("--aspect", String(aw / ah));
-        if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, (response) => showStats2(response?.stats ?? null));
+        if (!sameSize) frame.dataset.resampled = "";
+        if (canAutoAlign(pair)) askBackground("compare", pair, (response) => {
+          if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
+          showStats2(response?.stats ?? null);
+        });
         return;
       }
       if (bw === aw) {
@@ -720,6 +723,8 @@
 .${PREFIX}-diff-layer { isolation: isolate; opacity: 0.8; }
 .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed); }
 .${PREFIX}-diff-added { filter: url(#${PREFIX}-added); }
+.${PREFIX}-frame[data-resampled] .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed-resampled); }
+.${PREFIX}-frame[data-resampled] .${PREFIX}-diff-added { filter: url(#${PREFIX}-added-resampled); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
 .${PREFIX}-diff-image { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1); opacity: 0.25; }
