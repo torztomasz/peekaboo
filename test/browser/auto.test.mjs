@@ -177,13 +177,15 @@ test("red means removed and green means added on dark screenshots as on light on
 
 // ---------- Two densities ----------
 
+// The page's own Diff has to erase marks under 2px wide for such a pair (every resampled edge is one), so
+// a 1px line on screen can only have come from the worker's diff.
 test("a retina capture against a normal one is diffed by the worker, at the size the page shows", async () => {
-  const added = [130, 120, 30, 20, BLACK];
+  const added = [60, 200, 200, 1, BLACK];
   const html = pullRequest(pair(picture(800, 600, WHITE, BLOCKS), picture(400, 300, WHITE, [...scaled(BLOCKS, 0.5), added])));
   await withAuto(html, {}, async ({ page }) => {
     await diffMode(page);
     const seen = await pixels(frame(page));
-    assert.ok(isGreen(seen.at(146, 131)), `the added block: ${seen.at(146, 131)}`);
+    assert.ok(isGreen(seen.at(161, 201)), `the added 1px line: ${seen.at(161, 201)}`);
     assert.ok(isNeutral(seen.at(191, 113)), `a block both have: ${seen.at(191, 113)}`);
     assert.equal(await warnings(page), 0);
   });

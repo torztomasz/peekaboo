@@ -1,8 +1,8 @@
 // A pull request page for the content script to run on, shared by the browser tests.
 //
 // How: the page is served at a github.com URL from a route, so the script sees the origin it ships for
-// (localStorage works, as it doesn't on about:blank) and no request leaves the machine: anything the
-// route doesn't serve is aborted and recorded in `requests`. Tables are marked up the way GitHub renders
+// (localStorage works, as it doesn't on about:blank) and no request leaves the machine: anything but
+// the navigation to the pull request itself is aborted and recorded in `requests`. Tables are marked up the way GitHub renders
 // markdown (copied from a real pull request's body_html: the custom-element wrapper, role="table", images
 // inside links with an inline max-width). Every test gets its own browser context, so a saved mode or
 // alignment never leaks from one test into the next.
@@ -72,7 +72,7 @@ async function openPullRequest(browser, html, { auto = false, granted = true, se
   const requests = [];
   await context.route("**/*", (route) => {
     const url = route.request().url();
-    if (url === PR_URL) return route.fulfill({ contentType: "text/html", body: html });
+    if (url === PR_URL && route.request().isNavigationRequest()) return route.fulfill({ contentType: "text/html", body: html });
     const body = serve[url]?.(route.request().resourceType());
     if (body) return route.fulfill({ contentType: "image/png", headers: { "access-control-allow-origin": "*" }, body });
     if (!serve[url]) requests.push(url);
@@ -154,7 +154,7 @@ export const isNeutral = (rgb) => visibleHue(rgb).spread < 12;
 // ---------- The worker on its own ----------
 
 // A page running the worker's bundle behind a stub `chrome`: `ask(message)` sends it a message and resolves
-// with the reply; `screens` (bench/screens.js) draws synthetic screenshots; `serve(url, canvas)` makes a
+// with the reply (or rejects when none comes); `screens` (bench/screens.js) draws synthetic screenshots; `serve(url, canvas)` makes a
 // canvas fetchable at a GitHub-style URL; `granted`, `fetched` and `opened` are there to set and read.
 export async function openWorker(browser) {
   const page = await browser.newPage();
@@ -177,7 +177,11 @@ export async function openWorker(browser) {
         permissions: { contains: async () => window.granted },
         tabs: { create: (tab) => window.opened.tabs.push(tab) },
       };
-      window.ask = (message) => new Promise((resolve) => window.listener(message, {}, resolve));`,
+      // A reply that never comes fails the test that asked, instead of hanging the run.
+      window.ask = (message) => new Promise((resolve, reject) => {
+        setTimeout(() => reject(new Error("no reply from the worker to " + JSON.stringify(message).slice(0, 200))), ${WAIT_MS});
+        window.listener(message, {}, resolve);
+      });`,
   });
   await page.addScriptTag({ content: await built("background.ts") });
   return page;

@@ -125,7 +125,7 @@ npm run package   # → release/peekaboo-<version>.zip
 npm run check     # the gate: everything below except the canary, mutation run and benchmarks
 ```
 
-`npm run check` is what CI runs on every push and pull request. Its parts:
+`npm run check` is what CI runs on every pull request and every push to main. Its parts:
 
 | Command | What it holds in place |
 | --- | --- |

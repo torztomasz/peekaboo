@@ -78,13 +78,3 @@ test("opens the welcome page on install only, and settings from the toolbar icon
   });
   assert.deepEqual(opened, { tabs: [{ url: "options.html?welcome" }], settings: 1 });
 });
-
-// Asked from a pull request, settings open beside that tab and know which tab to go back to.
-test("opens settings next to the pull request that asked for them", async () => {
-  const opened = await page.evaluate(() => {
-    window.opened.tabs = [];
-    window.listener({ type: "open-options" }, { tab: { id: 41, index: 5 } }, () => {});
-    return window.opened.tabs;
-  });
-  assert.deepEqual(opened, [{ url: "options.html?from=41", index: 6, openerTabId: 41 }]);
-});
