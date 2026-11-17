@@ -16,7 +16,7 @@ at two thumbnails side by side.
 
 - **Flip** (default): click or press Space to blink between before and after. Anything that changed jumps.
   Or hold Shift over a pair to peek at the other side, and let go to come back; in Diff it shows the plain After.
-- **Diff**: only changed pixels light up, red where Before had something, green where After does.
+- **Diff**: only changed pixels light up, red where Before is darker, green where After is darker.
 - **Side by side**: GitHub's own table, which is never modified, only hidden.
 - **Different sizes**: a retina capture next to a normal one is scaled to match. Otherwise both keep one
   pixel scale and line up by **Auto**: a crop of the other screenshot (a viewport inside a full-page
@@ -104,7 +104,7 @@ What it should find:
 What it should show:
 - Above each matching table, a toolbar with modes: Side by side (GitHub's original table, left untouched in the DOM and only hidden), Flip and Diff, plus a "Full screen" button. Both images are stacked at the same width.
 - Flip (the default): click or press Space to switch between Before and After, with a label showing which one is on screen.
-- Diff: highlight only the pixels that changed, red where Before had something and green where After does. GitHub serves uploaded images without CORS headers, so canvas pixel reads won't work. Do it in the compositor instead: in an isolated group, stack the image, the other image with mix-blend-mode: lighten, then the first image again with mix-blend-mode: difference. That leaves max(0, other - this) per channel. Colour it with an SVG feColorMatrix filter whose alpha rises with the difference (ignore anti-aliasing noise) and dilate it 1px so hairline changes stay visible. For videos, fall back to Flip.
+- Diff: highlight only the pixels that changed, red where Before is darker and green where After is darker. GitHub serves uploaded images without CORS headers, so canvas pixel reads won't work. Do it in the compositor instead: in an isolated group, stack the image, the other image with mix-blend-mode: lighten, then the first image again with mix-blend-mode: difference. That leaves max(0, other - this) per channel. Colour it with an SVG feColorMatrix filter whose alpha rises with the difference (ignore anti-aliasing noise) and dilate it 1px so hairline changes stay visible. For videos, fall back to Flip.
 - Never upscale small screenshots inline: cap the comparison at the image's natural width.
 - The chosen mode is one preference saved in localStorage and applied to every table on every page. Keep the clicked toolbar at the same place on screen when other tables above it change height.
 - Full screen: an overlay showing one pair at a time, as large as fits with its caption underneath. Left/right arrows step through every pair on the page across all tables, keys 1 and 2 switch modes, Esc closes and scrolls back to the pair you were on. Move the existing stage element into the overlay and back instead of cloning it, so the Flip side carries over.
