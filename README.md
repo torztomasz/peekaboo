@@ -16,7 +16,8 @@ at two thumbnails side by side.
 
 - **Flip** (default): click or press Space to blink between before and after. Anything that changed jumps.
   Or hold Shift over a pair to peek at the other side, and let go to come back; in Diff it shows the plain After.
-- **Diff**: only changed pixels light up, red where Before is darker, green where After is darker.
+- **Diff**: only changed pixels light up, red for what was removed and green for what was added. On dark-theme
+  screenshots that takes Auto (below), which tells dark from light; without it, red is wherever Before is darker.
 - **Side by side**: GitHub's own table, which is never modified, only hidden.
 - **Different sizes**: a retina capture next to a normal one is scaled to match. Otherwise both keep one
   pixel scale and line up by **Auto**: a crop of the other screenshot (a viewport inside a full-page

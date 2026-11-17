@@ -9,8 +9,10 @@ type PairRequest = { type: "align" | "compare"; before: string; after: string };
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
 // `same`: no pixel differs visibly (by the rule that colours the diff), so the same screenshot was likely
 // uploaded twice. Null where the two don't line up pixel for pixel, so it can't be told.
-type AlignResponse = { placement: Placement; diff: string; same: boolean | null } | { needsPermission: true } | { error: string };
-type CompareResponse = { same: boolean; diff?: string } | { needsPermission: true } | { error: string };
+// `dark`: the screenshots are mostly dark (a dark theme), where content is the light part. The diff's colours
+// are swapped for them, so red always marks what was removed and green what was added.
+type AlignResponse = { placement: Placement; diff: string; same: boolean | null; dark: boolean } | { needsPermission: true } | { error: string };
+type CompareResponse = { same: boolean; dark: boolean; diff?: string } | { needsPermission: true } | { error: string };
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message?.type === "align" || message?.type === "compare") {
@@ -64,7 +66,8 @@ async function findOffset({ before, after }: PairRequest): Promise<AlignResponse
     placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
   }
   const changes = changeMaps(b, a, placement);
-  return { placement, diff: await diffImage(changes), same: exact ? changes.changed === 0 : null };
+  const dark = isDark(b, a);
+  return { placement, diff: await diffImage(changes, dark), same: exact ? changes.changed === 0 : null, dark };
 }
 
 // Same-size pairs line up as they are, so the page only needs to know whether anything changed. It's the
@@ -77,7 +80,15 @@ async function compare({ before, after }: PairRequest): Promise<CompareResponse>
   if (!(await chrome.permissions.contains({ origins: IMAGE_ORIGINS }))) return { needsPermission: true };
   const [b, a] = await Promise.all([load(before), load(after)]);
   if (b.width !== a.width || b.height !== a.height) return compareDensities(b, a);
-  return { same: changeMaps(b, a, AS_IS).changed === 0 };
+  return { same: changeMaps(b, a, AS_IS).changed === 0, dark: isDark(b, a) };
+}
+
+// The removed/added maps say which side is darker, which is "which side has the content" only on light
+// screenshots. Averaged over both, so a pair that switches theme falls on the side most of it is on.
+function isDark(before: ImageBitmap, after: ImageBitmap) {
+  const mean = ({ data }: Gray) => data.reduce((sum, value) => sum + value, 0) / data.length;
+  const small = (bitmap: ImageBitmap) => gray(bitmap, Math.min(1, 200 / bitmap.width), 0, bitmap.height);
+  return (mean(small(before)) + mean(small(after))) / 2 < 128;
 }
 
 function slideSideways(wide: ImageBitmap, narrow: ImageBitmap) {
@@ -181,7 +192,8 @@ async function compareDensities(before: ImageBitmap, after: ImageBitmap): Promis
   // The page shows both at one width, heights following, so compare them the same way.
   const width = Math.min(before.width, after.width);
   const changes = tolerantChangeMaps(resample(before, width), resample(after, width));
-  return { same: changes.changed === 0, diff: await diffImage(changes) };
+  const dark = isDark(before, after);
+  return { same: changes.changed === 0, dark, diff: await diffImage(changes, dark) };
 }
 
 type Rgba = { data: Uint8ClampedArray; width: number; height: number };
@@ -248,7 +260,8 @@ function tolerantChangeMaps(before: Rgba, after: Rgba): ChangeMaps {
   return { removed, added, width, height, changed };
 }
 
-async function diffImage({ removed, added, width, height }: ChangeMaps) {
+async function diffImage({ removed, added, width, height }: ChangeMaps, dark: boolean) {
+  const [darkerBefore, darkerAfter] = dark ? [ADDED, REMOVED] : [REMOVED, ADDED];
   const out = new ImageData(width, height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -258,7 +271,7 @@ async function diffImage({ removed, added, width, height }: ChangeMaps) {
         if (yy < 0 || xx < 0 || yy >= height || xx >= width) continue;
         r = Math.max(r, removed[yy * width + xx]); g = Math.max(g, added[yy * width + xx]);
       }
-      const [color, alpha] = r >= g ? [REMOVED, r] : [ADDED, g];
+      const [color, alpha] = r >= g ? [darkerBefore, r] : [darkerAfter, g];
       const i = (y * width + x) * 4;
       out.data[i] = color[0]; out.data[i + 1] = color[1]; out.data[i + 2] = color[2]; out.data[i + 3] = Math.round(alpha * 0.8 * 255);
     }
