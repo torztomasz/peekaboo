@@ -3,7 +3,8 @@
   var MODES = [
     { mode: "table", label: "Side by side", hint: "GitHub's own table" },
     { mode: "flip", label: "Flip", hint: "Click or press Space to blink between before and after" },
-    { mode: "diff", label: "Diff", hint: "Unchanged pixels fade out; red was darker before, green is darker after" }
+    { mode: "diff", label: "Diff", hint: "Unchanged pixels fade out; red was darker before, green is darker after" },
+    { mode: "slider", label: "Slider", hint: "Drag the divider: Before on the left, After on the right" }
   ];
   var DEFAULT_MODE = "flip";
   var MODE_KEY = "peekaboo-mode";
@@ -109,7 +110,8 @@
     const beforeTag = tag("Before", "before");
     const afterTag = tag("After", "after");
     const diff = el("div", `${PREFIX}-diff`);
-    frame.append(after, before, diff, beforeTag, afterTag);
+    const divider = el("div", `${PREFIX}-divider`);
+    frame.append(after, before, diff, divider, beforeTag, afterTag);
     const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
     root.append(frame);
     if (pair.label) {
@@ -120,6 +122,12 @@
     fitPair(root, frame, pair);
     let mode = DEFAULT_MODE;
     let showingBefore = true;
+    let split = 50;
+    const setSplit = (value) => {
+      split = Math.min(100, Math.max(0, value));
+      frame.style.setProperty("--split", String(split));
+    };
+    setSplit(split);
     function render() {
       const shown = mode === "diff" && !canDiff ? "flip" : mode;
       frame.dataset.mode = shown;
@@ -132,6 +140,8 @@
       } else if (shown === "flip") {
         before.style.opacity = showingBefore ? "1" : "0";
         frame.dataset.showing = showingBefore ? "before" : "after";
+      } else if (shown === "slider") {
+        before.style.opacity = "1";
       }
     }
     frame.addEventListener("peekaboo:diff", (event) => {
@@ -145,12 +155,29 @@
       }
       render();
     });
-    frame.addEventListener("pointerdown", () => {
+    const splitAt = (event) => {
+      const rect = frame.getBoundingClientRect();
+      setSplit((event.clientX - rect.left - frame.clientLeft) / frame.clientWidth * 100);
+    };
+    frame.addEventListener("pointerdown", (event) => {
+      if (frame.dataset.mode === "slider") {
+        frame.setPointerCapture(event.pointerId);
+        splitAt(event);
+        return;
+      }
       if (frame.dataset.mode !== "flip") return;
       showingBefore = !showingBefore;
       render();
     });
+    frame.addEventListener("pointermove", (event) => {
+      if (frame.dataset.mode === "slider" && frame.hasPointerCapture(event.pointerId)) splitAt(event);
+    });
     frame.addEventListener("keydown", (event) => {
+      if (frame.dataset.mode === "slider" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault();
+        setSplit(split + (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 10 : 2));
+        return;
+      }
       if (frame.dataset.mode !== "flip" || event.key !== " " && event.key !== "Enter") return;
       event.preventDefault();
       showingBefore = !showingBefore;
@@ -273,6 +300,8 @@
     frame.style.setProperty("--after-x", pct(p.afterX));
     frame.style.setProperty("--before-y", pct(p.beforeY));
     frame.style.setProperty("--after-y", pct(p.afterY));
+    frame.style.setProperty("--before-end", String((p.beforeX + bw) / width * 100));
+    frame.style.setProperty("--after-start", String(p.afterX / width * 100));
   }
   function buildAlignBar(frame, pair, beforeSize, afterSize, found) {
     const [bw, bh] = beforeSize, [aw, ah] = afterSize;
@@ -576,6 +605,22 @@
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1); opacity: 0.25; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
+/* Slider: Before shows left of the divider, After right of it. Clip insets are relative to each image's own box,
+   which Auto/Left/Center/Right may offset inside the frame, so they're computed in frame units (cqw) from the
+   images' frame-relative edges. */
+.${PREFIX}-frame[data-mode="slider"] { container-type: inline-size; cursor: ew-resize; }
+.${PREFIX}-frame[data-mode="slider"] > .${PREFIX}-before { clip-path: inset(0 max(0px, calc((var(--before-end, 100) - var(--split, 50)) * 1cqw)) 0 0); }
+.${PREFIX}-frame[data-mode="slider"] > .${PREFIX}-after { clip-path: inset(0 0 0 max(0px, calc((var(--split, 50) - var(--after-start, 0)) * 1cqw))); }
+.${PREFIX}-divider {
+  position: absolute; top: 0; bottom: 0; left: calc(var(--split, 50) * 1%); width: 2px; transform: translateX(-50%);
+  background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35); pointer-events: none;
+}
+.${PREFIX}-divider::after {
+  content: "\u2039 \u203A"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 14px; font-weight: 600; letter-spacing: 1px; color: #fff; background: rgb(0 0 0 / 0.65); box-shadow: 0 0 0 2px #fff;
+}
+.${PREFIX}-frame:not([data-mode="slider"]) .${PREFIX}-divider { display: none; }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }
 
 .${PREFIX}-locked { overflow: hidden; }

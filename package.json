@@ -1,6 +1,6 @@
 {
   "name": "peekaboo",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "scripts": {
     "build": "esbuild src/content.ts src/background.ts src/options.ts --bundle --format=iife --target=chrome120 --outdir=dist",

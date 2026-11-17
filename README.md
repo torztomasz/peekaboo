@@ -16,13 +16,15 @@ at two thumbnails side by side.
 
 - **Flip** (default): click or press Space to blink between before and after. Anything that changed jumps.
 - **Diff**: only changed pixels light up, red where Before had something, green where After does.
+- **Slider**: drag the vertical divider (or press ← → with the image focused, Shift for bigger steps) to reveal
+  Before on the left and After on the right.
 - **Side by side**: GitHub's own table, which is never modified, only hidden.
 - **Different sizes**: a retina capture next to a normal one is scaled to match. Otherwise both keep one
   pixel scale and line up by **Auto**: a crop of the other screenshot (a viewport inside a full-page
   capture, a detail inside a screen) is placed exactly where it matches, and two window widths of one
   page slide sideways to where they match; the diff is then computed at full resolution. Or line them up
   by the left edge, centre or right edge yourself.
-- **Full screen**: one pair at a time, ← → through every pair in the PR, 1–2 to switch modes, Esc to close.
+- **Full screen**: one pair at a time, ← → through every pair in the PR, 1–3 to switch modes, Esc to close.
 
 Your chosen mode sticks across tables and PRs. Recordings (videos) get a Play button that starts both in
 step.
