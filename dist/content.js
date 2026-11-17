@@ -24,6 +24,9 @@
     };
     new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
     document.addEventListener("keydown", handleViewerKeys, true);
+    document.addEventListener("keydown", (event) => event.key === "Shift" && !event.repeat && startPeek(event), true);
+    document.addEventListener("keyup", (event) => event.key === "Shift" && endPeek(), true);
+    window.addEventListener("blur", endPeek);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") eachAlignBar((bar) => bar.retryAuto());
     });
@@ -97,7 +100,7 @@
     const entry = {
       root: widget,
       applyMode,
-      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, regions: stage.regions, zoomTo: stage.zoomTo }))
+      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, peek: stage.peek, regions: stage.regions, zoomTo: stage.zoomTo }))
     };
     widgets.add(entry);
     expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -148,19 +151,26 @@
     }
     let mode = DEFAULT_MODE;
     let showingBefore = true;
+    let peeking = false;
     function render() {
-      const shown = mode === "diff" && !canDiff ? "flip" : mode;
+      let shown = mode === "diff" && !canDiff ? "flip" : mode;
+      const beforeShown = shownSide();
+      if (peeking && shown === "diff") shown = "flip";
       frame.dataset.mode = shown;
       beforeTag.textContent = shown === "diff" ? "Before only" : "Before";
       afterTag.textContent = shown === "diff" ? "After only" : "After";
-      after.style.visibility = shown === "flip" && showingBefore ? "hidden" : "visible";
+      after.style.visibility = shown === "flip" && beforeShown ? "hidden" : "visible";
       if (shown === "diff") {
         if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
         before.style.opacity = "0";
       } else if (shown === "flip") {
-        before.style.opacity = showingBefore ? "1" : "0";
-        frame.dataset.showing = showingBefore ? "before" : "after";
+        before.style.opacity = beforeShown ? "1" : "0";
+        frame.dataset.showing = beforeShown ? "before" : "after";
       }
+    }
+    function shownSide() {
+      if (!peeking) return showingBefore;
+      return mode === "diff" ? false : !showingBefore;
     }
     frame.addEventListener("peekaboo:diff", (event) => {
       const url = event.detail;
@@ -179,13 +189,22 @@
       render();
     }
     frame.addEventListener("pointerdown", flip);
+    frame.addEventListener("pointerenter", () => hovered = stage);
+    frame.addEventListener("pointerleave", () => {
+      if (hovered === stage) hovered = null;
+    });
     frame.addEventListener("keydown", (event) => {
       if (event.key !== " " && event.key !== "Enter") return;
       event.preventDefault();
       flip();
     });
-    return {
+    const stage = {
       root,
+      peek(on) {
+        if (peeking === on) return;
+        peeking = on;
+        render();
+      },
       regions: () => regions,
       flip,
       zoomTo,
@@ -195,6 +214,20 @@
         render();
       }
     };
+    return stage;
+  }
+  var hovered = null;
+  var peekingAt = null;
+  function startPeek(event) {
+    const typing = event.target.closest?.("input, textarea, select, [contenteditable]:not([contenteditable=false])");
+    const peek = viewer ? viewer.slides[viewer.index].peek : hovered?.peek;
+    if (typing || !peek) return;
+    peekingAt = peek;
+    peek(true);
+  }
+  function endPeek() {
+    peekingAt?.(false);
+    peekingAt = null;
   }
   function buildDiffLayers(beforeSource, afterSource) {
     const onlyBefore = diffLayer([beforeSource, "before"], [afterSource, "after"], "removed");
@@ -594,6 +627,7 @@
     hint(["\u2190", "\u2192"], "pair");
     const change = hint(["\u2191", "\u2193"], "change");
     hint(["Space"], "flip");
+    hint(["Shift"], "hold to peek");
     hint(VIEWER_MODES.map((_, index) => String(index + 1)), VIEWER_MODES.map(({ label }) => label).join(" / "));
     hint(["Esc"], "close");
     return { row, change };

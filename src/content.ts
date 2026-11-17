@@ -27,7 +27,9 @@ type Widget = { root: HTMLElement; applyMode: (mode: Mode) => void; slides: Slid
 
 // One pair as the full-screen viewer shows it: the stage element plus the text that explains it, and the
 // places that changed (known only with Auto's permission) with a way to zoom to one of them.
-type Slide = { stage: HTMLElement; label: string; caption: string; flip: () => void; regions: () => Region[]; zoomTo: (region: Region | null) => void };
+type Slide = { stage: HTMLElement; label: string; caption: string; flip: () => void; peek: Peek; regions: () => Region[]; zoomTo: (region: Region | null) => void };
+type Stage = ReturnType<typeof buildStage>;
+type Peek = (on: boolean) => void;
 
 main();
 
@@ -46,6 +48,9 @@ function main() {
   new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
   // Capture phase, so full-screen keys win over anything focused on the page.
   document.addEventListener("keydown", handleViewerKeys, true);
+  document.addEventListener("keydown", (event) => event.key === "Shift" && !event.repeat && startPeek(event), true);
+  document.addEventListener("keyup", (event) => event.key === "Shift" && endPeek(), true);
+  window.addEventListener("blur", endPeek);
   // Back from the options page with the permission granted: bars waiting for it try again.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") eachAlignBar((bar) => bar.retryAuto());
@@ -138,7 +143,7 @@ function buildWidget(table: HTMLTableElement, pairs: Pair[]) {
   const entry: Widget = {
     root: widget,
     applyMode,
-    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, regions: stage.regions, zoomTo: stage.zoomTo })),
+    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, flip: stage.flip, peek: stage.peek, regions: stage.regions, zoomTo: stage.zoomTo })),
   };
   widgets.add(entry);
   expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -195,22 +200,31 @@ function buildStage(pair: Pair) {
 
   let mode: Mode = DEFAULT_MODE;
   let showingBefore = true;
+  // While Shift is held: Flip shows the other side, Diff shows the plain After under its colours.
+  let peeking = false;
 
   function render() {
     // Blend modes over video need every copy in step; a still-frame diff would mislead, so videos flip instead.
-    const shown = mode === "diff" && !canDiff ? "flip" : mode;
+    let shown = mode === "diff" && !canDiff ? "flip" : mode;
+    const beforeShown = shownSide();
+    if (peeking && shown === "diff") shown = "flip";
     frame.dataset.mode = shown;
     beforeTag.textContent = shown === "diff" ? "Before only" : "Before";
     afterTag.textContent = shown === "diff" ? "After only" : "After";
     // Both share one grid cell sized to the taller image, so a taller After would peek out below a flipped-in Before.
-    after.style.visibility = shown === "flip" && showingBefore ? "hidden" : "visible";
+    after.style.visibility = shown === "flip" && beforeShown ? "hidden" : "visible";
     if (shown === "diff") {
       if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
       before.style.opacity = "0";
     } else if (shown === "flip") {
-      before.style.opacity = showingBefore ? "1" : "0";
-      frame.dataset.showing = showingBefore ? "before" : "after";
+      before.style.opacity = beforeShown ? "1" : "0";
+      frame.dataset.showing = beforeShown ? "before" : "after";
     }
+  }
+
+  function shownSide() {
+    if (!peeking) return showingBefore;
+    return mode === "diff" ? false : !showingBefore;
   }
 
   frame.addEventListener("peekaboo:diff", (event) => {
@@ -230,14 +244,23 @@ function buildStage(pair: Pair) {
     render();
   }
   frame.addEventListener("pointerdown", flip);
+  frame.addEventListener("pointerenter", () => (hovered = stage));
+  frame.addEventListener("pointerleave", () => {
+    if (hovered === stage) hovered = null;
+  });
   frame.addEventListener("keydown", (event) => {
     if (event.key !== " " && event.key !== "Enter") return;
     event.preventDefault();
     flip();
   });
 
-  return {
+  const stage = {
     root,
+    peek(on: boolean) {
+      if (peeking === on) return;
+      peeking = on;
+      render();
+    },
     regions: () => regions,
     flip,
     zoomTo,
@@ -246,7 +269,27 @@ function buildStage(pair: Pair) {
       mode = next;
       render();
     },
-  };
+  };  return stage;
+}
+
+// ---------- Hold to peek ----------
+
+// The pair under the mouse, so Shift on the page knows which one to peek at.
+let hovered: Stage | null = null;
+let peekingAt: Peek | null = null;
+
+// Shift is also how capitals are typed, so it does nothing while a text field has focus.
+function startPeek(event: KeyboardEvent) {
+  const typing = (event.target as HTMLElement).closest?.("input, textarea, select, [contenteditable]:not([contenteditable=false])");
+  const peek = viewer ? viewer.slides[viewer.index].peek : hovered?.peek;
+  if (typing || !peek) return;
+  peekingAt = peek;
+  peek(true);
+}
+
+function endPeek() {
+  peekingAt?.(false);
+  peekingAt = null;
 }
 
 // ---------- Diff ----------
@@ -739,6 +782,7 @@ function buildKeyHints() {
   hint(["←", "→"], "pair");
   const change = hint(["↑", "↓"], "change");
   hint(["Space"], "flip");
+  hint(["Shift"], "hold to peek");
   hint(VIEWER_MODES.map((_, index) => String(index + 1)), VIEWER_MODES.map(({ label }) => label).join(" / "));
   hint(["Esc"], "close");
   return { row, change };

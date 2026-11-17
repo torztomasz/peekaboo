@@ -15,6 +15,7 @@ at two thumbnails side by side.
 ## What it does
 
 - **Flip** (default): click or press Space to blink between before and after. Anything that changed jumps.
+  Or hold Shift over a pair to peek at the other side, and let go to come back; in Diff it shows the plain After.
 - **Diff**: only changed pixels light up, red where Before had something, green where After does.
 - **Side by side**: GitHub's own table, which is never modified, only hidden.
 - **Different sizes**: a retina capture next to a normal one is scaled to match. Otherwise both keep one
