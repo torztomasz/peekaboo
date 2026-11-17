@@ -205,30 +205,35 @@
     };
     const strength = (gap) => Math.min(1, Math.max(0, 6 * gap - 0.06));
     const removed = new Float32Array(width * height), added = new Float32Array(width * height);
-    const seedRemoved = new Float32Array(width * height), seedAdded = new Float32Array(width * height);
+    const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
+    const seeded = new Uint8Array(cols * rows);
     for (let y = 0; y < overlap; y++) {
       for (let x = 0; x < width; x++) {
         const p = y * width + x, i = p * 4;
         const lost = missing(before.data, after.data, i, x, y), gained = missing(after.data, before.data, i, x, y);
         removed[p] = strength(lost);
         added[p] = strength(gained);
-        if (removed[p] > 0 && strength(lost - EDGE_TOLERANCE * contrast(after.data, x, y)) >= SEED_STRENGTH) seedRemoved[p] = 1;
-        if (added[p] > 0 && strength(gained - EDGE_TOLERANCE * contrast(before.data, x, y)) >= SEED_STRENGTH) seedAdded[p] = 1;
+        const seed = removed[p] > 0 && strength(lost - EDGE_TOLERANCE * contrast(after.data, x, y)) >= SEED_STRENGTH || added[p] > 0 && strength(gained - EDGE_TOLERANCE * contrast(before.data, x, y)) >= SEED_STRENGTH;
+        if (seed) seeded[(y / CELL | 0) * cols + (x / CELL | 0)] = 1;
       }
     }
-    const stats = { changed: 0, compared: width * overlap, regions: findRegions(seedRemoved, seedAdded, width, height) };
-    const inside = new Uint8Array(width * height).fill(stats.regions.length < MAX_REGIONS ? 0 : 1);
-    for (const region of stats.regions) {
-      const x0 = Math.round(region.x * width), y0 = Math.round(region.y * height);
-      const x1 = Math.round((region.x + region.w) * width), y1 = Math.round((region.y + region.h) * height);
-      for (let y = y0; y < y1; y++) inside.fill(1, y * width + x0, y * width + x1);
+    const kept = new Uint8Array(cols * rows);
+    seeded.forEach((seed, cell) => {
+      if (!seed) return;
+      const col = cell % cols, row = cell / cols | 0;
+      for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) kept.fill(1, r * cols + Math.max(0, col - REACH), r * cols + Math.min(cols, col + REACH + 1));
+    });
+    const stats = { changed: 0, compared: width * overlap, regions: [] };
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const p = y * width + x;
+        if (!kept[(y / CELL | 0) * cols + (x / CELL | 0)]) {
+          removed[p] = 0;
+          added[p] = 0;
+        } else if (removed[p] > 0 || added[p] > 0) stats.changed++;
+      }
     }
-    for (let p = 0; p < width * height; p++) {
-      if (!inside[p]) {
-        removed[p] = 0;
-        added[p] = 0;
-      } else if (removed[p] > 0 || added[p] > 0) stats.changed++;
-    }
+    stats.regions = findRegions(removed, added, width, height);
     return { removed, added, width, height, stats };
   }
   var CELL = 8;
