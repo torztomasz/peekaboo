@@ -70,16 +70,15 @@ async function openPullRequest(browser, html, { auto = false, granted = true, se
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   context.setDefaultTimeout(WAIT_MS);
   const requests = [];
+  const page = await context.newPage();
   await context.route("**/*", (route) => {
     const url = route.request().url();
-    const isThePage = url === PR_URL && route.request().isNavigationRequest() && !route.request().frame().parentFrame();
-    if (isThePage) return route.fulfill({ contentType: "text/html", body: html });
+    if (url === PR_URL && isNavigationOf(page, route.request())) return route.fulfill({ contentType: "text/html", body: html });
     const body = serve[url]?.(route.request().resourceType());
     if (body) return route.fulfill({ contentType: "image/png", headers: { "access-control-allow-origin": "*" }, body });
     if (!serve[url]) requests.push(url);
     return route.abort();
   });
-  const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   const load = async () => {
@@ -94,6 +93,16 @@ async function openPullRequest(browser, html, { auto = false, granted = true, se
   };
   await load();
   return { context, page, requests, errors, reload: load };
+}
+
+// The tab loading its own page, as opposed to an iframe or a popup asking for the same URL. A popup's
+// first request has no frame yet, which Playwright reports by throwing.
+function isNavigationOf(page, request) {
+  try {
+    return request.isNavigationRequest() && request.frame() === page.mainFrame();
+  } catch {
+    return false;
+  }
 }
 
 // Chrome's side of the extension: messages go straight to the worker's listener, and the calls a test
