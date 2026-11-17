@@ -130,12 +130,6 @@
       root.append(caption);
     }
     let regions = [];
-    fitPair(root, frame, pair, (counts) => {
-      showStats(stats, counts);
-      regions = counts && counts.regions.length <= MAX_STEPS ? counts.regions : [];
-      zoomTo(null);
-      root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
-    });
     function zoomTo(region) {
       focus.hidden = !region;
       if (!region) {
@@ -214,6 +208,12 @@
         render();
       }
     };
+    fitPair(root, frame, pair, (counts) => {
+      showStats(stats, counts);
+      regions = counts && counts.regions.length <= MAX_STEPS ? counts.regions : [];
+      zoomTo(null);
+      root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
+    });
     return stage;
   }
   var hovered = null;

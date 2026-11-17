@@ -176,12 +176,6 @@ function buildStage(pair: Pair) {
     root.append(caption);
   }
   let regions: Region[] = [];
-  fitPair(root, frame, pair, (counts) => {
-    showStats(stats, counts);
-    regions = counts && counts.regions.length <= MAX_STEPS ? counts.regions : [];
-    zoomTo(null);
-    root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
-  });
 
   // Fills the frame with the region plus a margin, without showing past the canvas edges.
   function zoomTo(region: Region | null) {
@@ -269,7 +263,15 @@ function buildStage(pair: Pair) {
       mode = next;
       render();
     },
-  };  return stage;
+  };  // Last, because with cached images (GitHub re-rendering a comment) it runs at once and calls back into
+  // the state above.
+  fitPair(root, frame, pair, (counts) => {
+    showStats(stats, counts);
+    regions = counts && counts.regions.length <= MAX_STEPS ? counts.regions : [];
+    zoomTo(null);
+    root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
+  });
+  return stage;
 }
 
 // ---------- Hold to peek ----------
