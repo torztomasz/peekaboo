@@ -25,6 +25,7 @@ at two thumbnails side by side.
 - **How much changed**: with Auto on, each pair says what share of its pixels changed, and warns when Before
   and After are the same picture (the same screenshot uploaded twice looks like a clean Diff otherwise).
 - **Full screen**: one pair at a time, ← → through every pair in the PR, 1–2 to switch modes, Esc to close.
+  With Auto on, N and P zoom to each place that changed, outlined, and back out after the last one.
 
 Your chosen mode sticks across tables and PRs. Recordings (videos) get a Play button that starts both in
 step.

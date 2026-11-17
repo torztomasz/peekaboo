@@ -97,7 +97,7 @@
     const entry = {
       root: widget,
       applyMode,
-      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption }))
+      slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, regions: stage.regions, zoomTo: stage.zoomTo }))
     };
     widgets.add(entry);
     expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -112,7 +112,11 @@
     const beforeTag = tag("Before", "before");
     const afterTag = tag("After", "after");
     const diff = el("div", `${PREFIX}-diff`);
-    frame.append(after, before, diff, beforeTag, afterTag);
+    const canvas = el("div", `${PREFIX}-canvas`);
+    const focus = el("div", `${PREFIX}-focus`);
+    focus.hidden = true;
+    canvas.append(after, before, diff, focus);
+    frame.append(canvas, beforeTag, afterTag);
     const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
     const stats = el("p", `${PREFIX}-stats`);
     stats.hidden = true;
@@ -122,7 +126,26 @@
       caption.textContent = pair.label;
       root.append(caption);
     }
-    fitPair(root, frame, pair, (counts) => showStats(stats, counts));
+    let regions = [];
+    fitPair(root, frame, pair, (counts) => {
+      showStats(stats, counts);
+      regions = counts?.regions ?? [];
+      zoomTo(null);
+      root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
+    });
+    function zoomTo(region) {
+      focus.hidden = !region;
+      if (!region) {
+        canvas.style.transform = "";
+        return;
+      }
+      const fit = Math.min(1 / (region.w + 2 * ZOOM_MARGIN), 1 / (region.h + 2 * ZOOM_MARGIN));
+      const zoom = Math.min(MAX_ZOOM, Math.max(1, fit));
+      const shift = (start, size) => Math.min(0, Math.max(1 - zoom, 0.5 - zoom * (start + size / 2)));
+      canvas.style.transform = `translate(${shift(region.x, region.w) * 100}%, ${shift(region.y, region.h) * 100}%) scale(${zoom})`;
+      canvas.style.setProperty("--zoom", String(zoom));
+      Object.assign(focus.style, { left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` });
+    }
     let mode = DEFAULT_MODE;
     let showingBefore = true;
     function render() {
@@ -163,6 +186,8 @@
     });
     return {
       root,
+      regions: () => regions,
+      zoomTo,
       videos: [before, after].filter((media) => media instanceof HTMLVideoElement),
       setMode(next) {
         mode = next;
@@ -233,6 +258,8 @@
       else alignBars.delete(frame);
     }
   }
+  var MAX_ZOOM = 4;
+  var ZOOM_MARGIN = 0.02;
   function fitPair(root, frame, pair, showStats2) {
     let done = false;
     const apply = () => {
@@ -440,9 +467,12 @@
       return { mode, button };
     });
     segmented.append(...modeButtons.map(({ button }) => button));
+    const changes = el("div", `${PREFIX}-viewer-changes`);
+    const changeLabel = el("span", `${PREFIX}-viewer-counter`);
+    changes.append(navButton("\u2039", "Previous change (P)", () => stepChange(-1)), changeLabel, navButton("\u203A", "Next change (N)", () => stepChange(1)));
     const close = navButton("\u2715", "Close (Esc)", closeViewer);
     close.classList.add(`${PREFIX}-viewer-close`);
-    bar.append(previous, counter, next, segmented, close);
+    bar.append(previous, counter, next, segmented, changes, close);
     const title = el("div", `${PREFIX}-viewer-title`);
     const body = el("div", `${PREFIX}-viewer-body`);
     const column = el("div", `${PREFIX}-viewer-column`);
@@ -452,7 +482,10 @@
     overlay.append(bar, title, body);
     document.body.append(overlay);
     document.documentElement.classList.add(`${PREFIX}-locked`);
-    viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("peekaboo") };
+    viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+    overlay.addEventListener("peekaboo:regions", (event) => {
+      if (viewer && event.target === viewer.slides[viewer.index]?.stage) showChange(-1);
+    });
     if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
     syncViewerModes();
     showSlide(Math.max(0, slides.indexOf(start)));
@@ -470,7 +503,23 @@
     viewer.caption.textContent = slide.caption;
     viewer.caption.hidden = !slide.caption;
     viewer.body.classList.toggle(`${PREFIX}-has-caption`, Boolean(slide.caption));
+    showChange(-1);
     slide.stage.querySelector(`.${PREFIX}-frame`)?.focus({ preventScroll: true });
+  }
+  function stepChange(delta) {
+    if (!viewer) return;
+    const count = viewer.slides[viewer.index].regions().length;
+    if (count) showChange((viewer.change + 1 + delta + count + 1) % (count + 1) - 1);
+  }
+  function showChange(change) {
+    if (!viewer) return;
+    const slide = viewer.slides[viewer.index];
+    const regions = slide.regions();
+    viewer.change = change;
+    slide.zoomTo(regions[change] ?? null);
+    viewer.changes.group.hidden = regions.length === 0;
+    const many = regions.length === 1 ? "1 change" : `${regions.length} changes`;
+    viewer.changes.label.textContent = change < 0 ? many : `${change + 1} of ${many}`;
   }
   function stepViewer(delta) {
     if (!viewer) return;
@@ -479,7 +528,9 @@
   }
   function returnStage() {
     if (!viewer || viewer.index < 0) return;
-    viewer.placeholder.replaceWith(viewer.slides[viewer.index].stage);
+    const slide = viewer.slides[viewer.index];
+    slide.zoomTo(null);
+    viewer.placeholder.replaceWith(slide.stage);
   }
   function closeViewer() {
     if (!viewer) return;
@@ -502,6 +553,9 @@
     else if (event.key === "ArrowLeft") stepViewer(-1);
     else if (event.key === "ArrowRight") stepViewer(1);
     else if (VIEWER_MODES[modeIndex]) setModeEverywhere(VIEWER_MODES[modeIndex].mode);
+    else if (event.metaKey || event.ctrlKey || event.altKey) return;
+    else if (event.key.toLowerCase() === "n") stepChange(1);
+    else if (event.key.toLowerCase() === "p") stepChange(-1);
     else return;
     event.preventDefault();
     event.stopPropagation();
@@ -565,7 +619,7 @@
     style.textContent = `
 .${PREFIX} { margin-bottom: 8px; }
 /* Our display rules would otherwise beat the hidden attribute on pages without a global [hidden] reset. */
-.${PREFIX} [hidden] { display: none !important; }
+.${PREFIX} [hidden], .${PREFIX}-viewer [hidden] { display: none !important; }
 .${PREFIX}-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .${PREFIX}-segmented { display: inline-flex; border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; overflow: hidden; }
 .${PREFIX}-mode, .${PREFIX}-expand {
@@ -584,6 +638,13 @@
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
+.${PREFIX}-canvas { grid-area: 1 / 1; display: grid; position: relative; transform-origin: 0 0; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) { .${PREFIX}-canvas { transition: none; } }
+/* Drawn inside the zoomed canvas, so line widths divide by the zoom to stay 2px on screen. */
+.${PREFIX}-focus {
+  position: absolute; pointer-events: none; border-radius: calc(4px / var(--zoom, 1));
+  outline: calc(2px / var(--zoom, 1)) solid var(--fgColor-accent, #0969da); outline-offset: calc(4px / var(--zoom, 1));
+}
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 .${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
 .${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
@@ -624,6 +685,8 @@
 }
 .${PREFIX}-nav:hover { background: var(--bgColor-muted, #f6f8fa); }
 .${PREFIX}-viewer-bar .${PREFIX}-segmented { margin-left: 8px; }
+.${PREFIX}-viewer-changes { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
+.${PREFIX}-viewer-changes .${PREFIX}-viewer-counter { min-width: 96px; }
 .${PREFIX}-viewer-close { margin-left: auto; font-size: 14px; }
 .${PREFIX}-viewer-title { font-weight: 600; text-align: center; }
 .${PREFIX}-viewer-column { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }

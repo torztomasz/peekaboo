@@ -25,8 +25,9 @@ const widgets = new Set<Widget>();
 
 type Widget = { root: HTMLElement; applyMode: (mode: Mode) => void; slides: Slide[] };
 
-// One pair as the full-screen viewer shows it: the stage element plus the text that explains it.
-type Slide = { stage: HTMLElement; label: string; caption: string };
+// One pair as the full-screen viewer shows it: the stage element plus the text that explains it, and the
+// places that changed (known only with Auto's permission) with a way to zoom to one of them.
+type Slide = { stage: HTMLElement; label: string; caption: string; regions: () => Region[]; zoomTo: (region: Region | null) => void };
 
 main();
 
@@ -137,7 +138,7 @@ function buildWidget(table: HTMLTableElement, pairs: Pair[]) {
   const entry: Widget = {
     root: widget,
     applyMode,
-    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption })),
+    slides: stages.map((stage, index) => ({ stage: stage.root, label: pairs[index].label, caption, regions: stage.regions, zoomTo: stage.zoomTo })),
   };
   widgets.add(entry);
   expand.addEventListener("click", () => openViewer(entry.slides[0]));
@@ -153,7 +154,12 @@ function buildStage(pair: Pair) {
   const beforeTag = tag("Before", "before");
   const afterTag = tag("After", "after");
   const diff = el("div", `${PREFIX}-diff`);
-  frame.append(after, before, diff, beforeTag, afterTag);
+  // Everything that zooms together; the tags stay put on the frame.
+  const canvas = el("div", `${PREFIX}-canvas`);
+  const focus = el("div", `${PREFIX}-focus`);
+  focus.hidden = true;
+  canvas.append(after, before, diff, focus);
+  frame.append(canvas, beforeTag, afterTag);
   const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
 
   const stats = el("p", `${PREFIX}-stats`);
@@ -164,7 +170,28 @@ function buildStage(pair: Pair) {
     caption.textContent = pair.label;
     root.append(caption);
   }
-  fitPair(root, frame, pair, (counts) => showStats(stats, counts));
+  let regions: Region[] = [];
+  fitPair(root, frame, pair, (counts) => {
+    showStats(stats, counts);
+    regions = counts?.regions ?? [];
+    zoomTo(null);
+    root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
+  });
+
+  // Fills the frame with the region plus a margin, without showing past the canvas edges.
+  function zoomTo(region: Region | null) {
+    focus.hidden = !region;
+    if (!region) {
+      canvas.style.transform = "";
+      return;
+    }
+    const fit = Math.min(1 / (region.w + 2 * ZOOM_MARGIN), 1 / (region.h + 2 * ZOOM_MARGIN));
+    const zoom = Math.min(MAX_ZOOM, Math.max(1, fit));
+    const shift = (start: number, size: number) => Math.min(0, Math.max(1 - zoom, 0.5 - zoom * (start + size / 2)));
+    canvas.style.transform = `translate(${shift(region.x, region.w) * 100}%, ${shift(region.y, region.h) * 100}%) scale(${zoom})`;
+    canvas.style.setProperty("--zoom", String(zoom));
+    Object.assign(focus.style, { left: `${region.x * 100}%`, top: `${region.y * 100}%`, width: `${region.w * 100}%`, height: `${region.h * 100}%` });
+  }
 
   let mode: Mode = DEFAULT_MODE;
   let showingBefore = true;
@@ -211,6 +238,8 @@ function buildStage(pair: Pair) {
 
   return {
     root,
+    regions: () => regions,
+    zoomTo,
     videos: [before, after].filter((media): media is HTMLVideoElement => media instanceof HTMLVideoElement),
     setMode(next: Mode) {
       mode = next;
@@ -314,7 +343,11 @@ function eachAlignBar(action: (bar: AlignBar) => void) {
 }
 
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
-type Stats = { changed: number; compared: number };
+// `regions` are the separate places that changed, as fractions of the frame, top to bottom.
+type Stats = { changed: number; compared: number; regions: Region[] };
+type Region = { x: number; y: number; w: number; h: number };
+// Past 4x a screenshot's pixels turn to blocks; 2% of the frame each side keeps the region's surroundings in view.
+const MAX_ZOOM = 4, ZOOM_MARGIN = 0.02;
 type ShowStats = (stats: Stats | null) => void;
 
 function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: ShowStats) {
@@ -522,8 +555,11 @@ let viewer: {
   title: HTMLElement;
   caption: HTMLElement;
   modeButtons: { mode: Mode; button: HTMLButtonElement }[];
+  changes: { group: HTMLElement; label: HTMLElement };
   slides: Slide[];
   index: number;
+  // Which of the current slide's regions is zoomed in, or -1 for the whole pair.
+  change: number;
   placeholder: Comment;
 } | null = null;
 
@@ -548,9 +584,12 @@ function openViewer(start: Slide) {
     return { mode, button };
   });
   segmented.append(...modeButtons.map(({ button }) => button));
+  const changes = el("div", `${PREFIX}-viewer-changes`);
+  const changeLabel = el("span", `${PREFIX}-viewer-counter`);
+  changes.append(navButton("‹", "Previous change (P)", () => stepChange(-1)), changeLabel, navButton("›", "Next change (N)", () => stepChange(1)));
   const close = navButton("✕", "Close (Esc)", closeViewer);
   close.classList.add(`${PREFIX}-viewer-close`);
-  bar.append(previous, counter, next, segmented, close);
+  bar.append(previous, counter, next, segmented, changes, close);
 
   const title = el("div", `${PREFIX}-viewer-title`);
   // The caption sits right under the image, not at the screen's bottom edge, so it reads as the pair's caption.
@@ -563,7 +602,11 @@ function openViewer(start: Slide) {
   document.body.append(overlay);
   document.documentElement.classList.add(`${PREFIX}-locked`);
 
-  viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("peekaboo") };
+  viewer = { overlay, body, counter, title, caption, modeButtons, changes: { group: changes, label: changeLabel }, slides, index: -1, change: -1, placeholder: document.createComment("peekaboo") };
+  // Regions arrive from the background after the pair is already on screen, or change with the alignment.
+  overlay.addEventListener("peekaboo:regions", (event) => {
+    if (viewer && event.target === viewer.slides[viewer.index]?.stage) showChange(-1);
+  });
   if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
   syncViewerModes();
   showSlide(Math.max(0, slides.indexOf(start)));
@@ -582,7 +625,26 @@ function showSlide(index: number) {
   viewer.caption.textContent = slide.caption;
   viewer.caption.hidden = !slide.caption;
   viewer.body.classList.toggle(`${PREFIX}-has-caption`, Boolean(slide.caption));
+  showChange(-1);
   slide.stage.querySelector<HTMLElement>(`.${PREFIX}-frame`)?.focus({ preventScroll: true });
+}
+
+// Steps whole pair → change 1 → … → last change → whole pair, so N alone walks a pair and comes back out.
+function stepChange(delta: number) {
+  if (!viewer) return;
+  const count = viewer.slides[viewer.index].regions().length;
+  if (count) showChange(((viewer.change + 1 + delta + count + 1) % (count + 1)) - 1);
+}
+
+function showChange(change: number) {
+  if (!viewer) return;
+  const slide = viewer.slides[viewer.index];
+  const regions = slide.regions();
+  viewer.change = change;
+  slide.zoomTo(regions[change] ?? null);
+  viewer.changes.group.hidden = regions.length === 0;
+  const many = regions.length === 1 ? "1 change" : `${regions.length} changes`;
+  viewer.changes.label.textContent = change < 0 ? many : `${change + 1} of ${many}`;
 }
 
 function stepViewer(delta: number) {
@@ -593,7 +655,9 @@ function stepViewer(delta: number) {
 
 function returnStage() {
   if (!viewer || viewer.index < 0) return;
-  viewer.placeholder.replaceWith(viewer.slides[viewer.index].stage);
+  const slide = viewer.slides[viewer.index];
+  slide.zoomTo(null);
+  viewer.placeholder.replaceWith(slide.stage);
 }
 
 // Modes changed in full screen resized the tables behind it, so land on the pair you were looking at.
@@ -620,6 +684,9 @@ function handleViewerKeys(event: KeyboardEvent) {
   else if (event.key === "ArrowLeft") stepViewer(-1);
   else if (event.key === "ArrowRight") stepViewer(1);
   else if (VIEWER_MODES[modeIndex]) setModeEverywhere(VIEWER_MODES[modeIndex].mode);
+  else if (event.metaKey || event.ctrlKey || event.altKey) return;
+  else if (event.key.toLowerCase() === "n") stepChange(1);
+  else if (event.key.toLowerCase() === "p") stepChange(-1);
   else return;
   event.preventDefault();
   event.stopPropagation();
@@ -701,7 +768,7 @@ function injectStyles() {
   style.textContent = `
 .${PREFIX} { margin-bottom: 8px; }
 /* Our display rules would otherwise beat the hidden attribute on pages without a global [hidden] reset. */
-.${PREFIX} [hidden] { display: none !important; }
+.${PREFIX} [hidden], .${PREFIX}-viewer [hidden] { display: none !important; }
 .${PREFIX}-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .${PREFIX}-segmented { display: inline-flex; border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; overflow: hidden; }
 .${PREFIX}-mode, .${PREFIX}-expand {
@@ -720,6 +787,13 @@ function injectStyles() {
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
 .${PREFIX}-frame[data-mode="flip"] { cursor: pointer; }
+.${PREFIX}-canvas { grid-area: 1 / 1; display: grid; position: relative; transform-origin: 0 0; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) { .${PREFIX}-canvas { transition: none; } }
+/* Drawn inside the zoomed canvas, so line widths divide by the zoom to stay 2px on screen. */
+.${PREFIX}-focus {
+  position: absolute; pointer-events: none; border-radius: calc(4px / var(--zoom, 1));
+  outline: calc(2px / var(--zoom, 1)) solid var(--fgColor-accent, #0969da); outline-offset: calc(4px / var(--zoom, 1));
+}
 .${PREFIX}-frame .${PREFIX}-media { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 .${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
 .${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
@@ -760,6 +834,8 @@ function injectStyles() {
 }
 .${PREFIX}-nav:hover { background: var(--bgColor-muted, #f6f8fa); }
 .${PREFIX}-viewer-bar .${PREFIX}-segmented { margin-left: 8px; }
+.${PREFIX}-viewer-changes { display: flex; align-items: center; gap: 4px; margin-left: 8px; }
+.${PREFIX}-viewer-changes .${PREFIX}-viewer-counter { min-width: 96px; }
 .${PREFIX}-viewer-close { margin-left: auto; font-size: 14px; }
 .${PREFIX}-viewer-title { font-weight: 600; text-align: center; }
 .${PREFIX}-viewer-column { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }

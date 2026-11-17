@@ -8,7 +8,9 @@ import { FULL_SIZE_ROWS, type Gray, locate } from "./match";
 type PairRequest = { type: "align" | "compare"; before: string; after: string };
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
 // `changed` of `compared` pixels differ visibly (by the same rule that colours the diff).
-type Stats = { changed: number; compared: number };
+// `regions` are the separate places that changed, as fractions of the shared canvas, top to bottom.
+type Stats = { changed: number; compared: number; regions: Region[] };
+type Region = { x: number; y: number; w: number; h: number };
 type AlignResponse = { placement: Placement; diff: string; stats: Stats } | { needsPermission: true } | { error: string };
 type CompareResponse = { stats: Stats } | { needsPermission: true } | { error: string };
 
@@ -139,7 +141,7 @@ function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY,
   };
   const b = pixels(before), a = pixels(after);
   const removed = new Float32Array(width * height), added = new Float32Array(width * height);
-  const stats: Stats = { changed: 0, compared: 0 };
+  const stats: Stats = { changed: 0, compared: 0, regions: [] };
   for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
     for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
       const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
@@ -155,7 +157,45 @@ function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY,
       if (r > 0 || g > 0) stats.changed++;
     }
   }
+  stats.regions = findRegions(removed, added, width, height);
   return { removed, added, width, height, stats };
+}
+
+// What a reviewer calls one change (a reworded label, a moved button) is often several blobs of pixels a
+// few apart, so changed pixels are pooled into 8px cells and cells up to 2 apart join one region.
+const CELL = 8, REACH = 2, MAX_REGIONS = 99;
+
+function findRegions(removed: Float32Array, added: Float32Array, width: number, height: number): Region[] {
+  const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
+  const hit = new Uint8Array(cols * rows);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (removed[i] > 0 || added[i] > 0) hit[((y / CELL) | 0) * cols + ((x / CELL) | 0)] = 1;
+    }
+  }
+  const seen = new Uint8Array(cols * rows);
+  const regions: Region[] = [];
+  // Row-major scan, so each region is found from its top edge and the list comes out top to bottom.
+  for (let start = 0; start < hit.length && regions.length < MAX_REGIONS; start++) {
+    if (!hit[start] || seen[start]) continue;
+    let left = cols, right = 0, top = rows, bottom = 0;
+    const stack = [start];
+    seen[start] = 1;
+    while (stack.length) {
+      const cell = stack.pop()!, col = cell % cols, row = (cell / cols) | 0;
+      left = Math.min(left, col); right = Math.max(right, col); top = Math.min(top, row); bottom = Math.max(bottom, row);
+      for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) {
+        for (let c = Math.max(0, col - REACH); c <= Math.min(cols - 1, col + REACH); c++) {
+          const next = r * cols + c;
+          if (hit[next] && !seen[next]) { seen[next] = 1; stack.push(next); }
+        }
+      }
+    }
+    const x0 = left * CELL, y0 = top * CELL, x1 = Math.min(width, (right + 1) * CELL), y1 = Math.min(height, (bottom + 1) * CELL);
+    regions.push({ x: x0 / width, y: y0 / height, w: (x1 - x0) / width, h: (y1 - y0) / height });
+  }
+  return regions;
 }
 
 async function diffImage({ removed, added, width, height }: ChangeMaps) {
