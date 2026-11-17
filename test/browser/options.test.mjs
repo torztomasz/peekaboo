@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
-import { built, launch } from "./harness.mjs";
+import { WAIT_MS, built, launch } from "./harness.mjs";
 
 const ORIGIN = "https://peekaboo.test";
 const IMAGE_HOSTS = { origins: ["https://private-user-images.githubusercontent.com/*", "https://user-images.githubusercontent.com/*"] };
@@ -18,7 +18,7 @@ after(() => browser?.close());
 // `on`: whether Auto-align is already allowed. `chromeAllows`: what Chrome's prompt answers.
 async function withSettings(query, { on = false, chromeAllows = true }, run) {
   const context = await browser.newContext();
-  context.setDefaultTimeout(5000);
+  context.setDefaultTimeout(WAIT_MS);
   await context.route("**/*", async (route) => {
     const { pathname } = new URL(route.request().url());
     if (pathname === "/options.html") return route.fulfill({ contentType: "text/html", body: file("options.html") });

@@ -20,6 +20,10 @@ export { launch };
 export { draw, picture } from "./png.mjs";
 
 export const PR_URL = "https://github.com/acme/app/pull/1";
+// How long a test waits for something on the page. Generous, because the gate has to hold on a machine
+// busy with other work (a cold browser under load took over 5 s to answer its first Auto-align); short
+// under `npm run mutate`, where most runs are meant to fail and each wait is paid a thousand times.
+export const WAIT_MS = process.env.__STRYKER_ACTIVE_MUTANT__ ? 2000 : 30000;
 const source = (name) => new URL(`../../src/${name}`, import.meta.url).pathname;
 const bundles = new Map();
 export const built = (name) => bundles.get(name) ?? bundles.set(name, bundle(source(name))).get(name);
@@ -64,9 +68,7 @@ export async function withPullRequest(browser, html, options, run) {
 
 async function openPullRequest(browser, html, { auto = false, granted = true, serve = {}, before } = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
-  // Everything is local and instant; a wait this long means the thing waited for isn't coming. Shorter
-  // under `npm run mutate`, where most runs are meant to fail and each wait is paid a thousand times.
-  context.setDefaultTimeout(process.env.__STRYKER_ACTIVE_MUTANT__ ? 2000 : 5000);
+  context.setDefaultTimeout(WAIT_MS);
   const requests = [];
   await context.route("**/*", (route) => {
     const url = route.request().url();
