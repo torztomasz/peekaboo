@@ -33,7 +33,6 @@ type Peek = (on: boolean) => void;
 main();
 
 function main() {
-  injectStyles();
   let scheduled = false;
   const scheduleSync = () => {
     if (scheduled) return;
@@ -43,8 +42,12 @@ function main() {
       sync();
     });
   };
-  // GitHub re-renders comment bodies on navigation, edits and previews, so we re-scan on DOM changes.
-  new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
+  // GitHub re-renders comment bodies on navigation, edits and previews, so we re-scan on DOM changes. It
+  // also mutates a PR page all the time for other reasons (times ticking, reactions, hovercards, our own
+  // Flip), so only a change that adds or removes a table is worth a scan of the whole page.
+  new MutationObserver((records) => {
+    if (records.some((record) => hasTable(record.addedNodes) || hasTable(record.removedNodes))) scheduleSync();
+  }).observe(document.body, { childList: true, subtree: true });
   // Capture phase, so full-screen keys win over anything focused on the page.
   document.addEventListener("keydown", handleViewerKeys, true);
   document.addEventListener("keydown", keepFocusInside, true);
@@ -58,8 +61,14 @@ function main() {
   scheduleSync();
 }
 
+function hasTable(nodes: NodeList) {
+  for (const node of nodes) {
+    if (node.nodeType === Node.ELEMENT_NODE && ((node as Element).tagName === "TABLE" || (node as Element).querySelector("table"))) return true;
+  }
+  return false;
+}
+
 function sync() {
-  ensureDiffFilters();
   removeOrphanWidgets();
   for (const table of document.querySelectorAll<HTMLTableElement>(".markdown-body table")) {
     if (table.dataset[PROCESSED]) continue;
@@ -101,6 +110,7 @@ function readPairs(table: HTMLTableElement): Pair[] {
 // ---------- Widget ----------
 
 function buildWidget(table: HTMLTableElement, pairs: Pair[]) {
+  ensureStyles();
   const widget = el("div", PREFIX);
   const toolbar = el("div", `${PREFIX}-toolbar`);
   const view = el("div", `${PREFIX}-view`);
@@ -200,8 +210,8 @@ function buildStage(pair: Pair) {
     // Removed and Added only once the worker has said whether the screenshots are dark (see showTone); until
     // then red and green just mean "differs here, as Before / After had it".
     const toneKnown = Boolean(frame.dataset.tone);
-    beforeTag.textContent = shown === "diff" && toneKnown ? "Removed" : "Before";
-    afterTag.textContent = shown === "diff" && toneKnown ? "Added" : "After";
+    setText(beforeTag, shown === "diff" && toneKnown ? "Removed" : "Before");
+    setText(afterTag, shown === "diff" && toneKnown ? "Added" : "After");
     // Both share one grid cell sized to the taller image, so a taller After would peek out below a flipped-in Before.
     after.style.visibility = shown === "flip" && beforeShown ? "hidden" : "visible";
     if (shown === "diff") {
@@ -297,6 +307,7 @@ function endPeek() {
 // opacity grows with the difference, dilated 1px so hairline changes (a border, a 1px shift) stay visible.
 // "Darker" means ink on light screenshots; on dark screenshots the colours swap.
 function buildDiffLayers(beforeSource: HTMLImageElement | HTMLVideoElement, afterSource: HTMLImageElement | HTMLVideoElement) {
+  ensureDiffFilters();
   const onlyBefore = diffLayer([beforeSource, "before"], [afterSource, "after"], "removed");
   const onlyAfter = diffLayer([afterSource, "after"], [beforeSource, "before"], "added");
   return [onlyBefore, onlyAfter];
@@ -881,14 +892,23 @@ function tag(text: string, side: "before" | "after") {
   return node;
 }
 
+// Writing the same text still replaces the text node, a mutation every observer on the page has to look at.
+function setText(node: HTMLElement, text: string) {
+  if (node.textContent !== text) node.textContent = text;
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(name: K, className: string) {
   const node = document.createElement(name);
   node.className = className;
   return node;
 }
 
-function injectStyles() {
-  const style = document.createElement("style");
+// Only once a page has a widget: most GitHub pages never do, and shouldn't carry the rules.
+let styles: HTMLStyleElement | null = null;
+
+function ensureStyles() {
+  if (styles?.isConnected) return;
+  const style = (styles = document.createElement("style"));
   style.textContent = `
 /* GitHub's markdown gives the table it stands in for a 16px bottom margin. */
 .${PREFIX} { margin-bottom: 16px; }

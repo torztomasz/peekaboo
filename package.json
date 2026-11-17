@@ -7,7 +7,9 @@
     "build": "esbuild src/content.ts src/background.ts src/options.ts --bundle --format=iife --target=chrome120 --outdir=dist",
     "watch": "npm run build -- --watch",
     "test": "node --test test/*.test.ts",
-    "package": "sh scripts/package.sh"
+    "package": "sh scripts/package.sh",
+    "test:browser": "node --test test/browser/*.test.mjs",
+    "bench": "node bench/background.mjs && node bench/content.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

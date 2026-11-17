@@ -122,7 +122,12 @@ Done when: on a PR with a | Before | After | table, every mode works, the origin
 npm install
 npm run build     # or: npm run watch
 npm run package   # → release/peekaboo-<version>.zip
+npm test          # Auto-align's pixel work, in Node
+npm run test:browser   # the content script on a GitHub-like page, in headless Chromium
+npm run bench     # how long Auto-align takes, and what the script costs an idle GitHub tab
 ```
+
+The browser tests and benchmarks need Playwright's Chromium once: `npx playwright-core install chromium-headless-shell`.
 
 Reload the extension on `chrome://extensions` and refresh the GitHub tab after a build. Bump `version` in
 both `manifest.json` and `package.json` before packaging. `store/` holds listing text and images kept for a
