@@ -47,7 +47,7 @@
     let changed = 0, moved = false;
     for (const [x0, x1] of columnBands(asPlaced)) {
       const placedCount = countBand(asPlaced, x0, x1);
-      const lined = lineUpBand(before, after, x0, x1);
+      const lined = edgeMargins(x1 - x0).map((margin) => lineUpBand(before, after, x0, x1, margin)).reduce((best, next) => next && (!best || next.changed < best.changed) ? next : best, null);
       const better = lined && lined.changed < placedCount ? lined : null;
       const source = better ?? asPlaced;
       for (let y = 0; y < height; y++) {
@@ -114,47 +114,90 @@
     return count;
   }
   var MAX_ROW_EDITS = 1200;
-  var EDGE_MARGIN = 24;
-  var EDGE_SHARE = 0.05;
-  function lineUpBand(before, after, x0, x1) {
-    const pairs = matchRows(before.height, after.height, rowsMatch(before, after, x0, x1));
+  var edgeMargins = (width) => [.../* @__PURE__ */ new Set([Math.min(24, Math.floor(width * 0.05)), Math.min(128, Math.floor(width * 0.15))])];
+  function lineUpBand(before, after, x0, x1, margin) {
+    const beforeRows = rowHashes(before, x0 + margin, x1 - margin), afterRows = rowHashes(after, x0 + margin, x1 - margin);
+    const pairs = matchRows(before.height, after.height, (b2, a2) => beforeRows[b2] === afterRows[a2]);
     if (!pairs) return null;
+    const viewport = before.height === after.height;
+    const hunks = slideDeletions(toHunks(pairs, before.height, after.height), beforeRows, plainRows(after, x0, x1), viewport);
     const width = Math.max(before.width, after.width), height = Math.max(before.height, after.height);
     const removed = new Float32Array(width * height), added = new Float32Array(width * height);
     let changed = 0;
-    const mark = (x, y, other, oi) => {
-      const ai2 = (y * after.width + x) * 4;
-      const [r, g] = comparePixel(other, oi, after.data, ai2);
-      if ((r > 0 || g > 0) && y < before.height && !differs(before.data, (y * before.width + x) * 4, after.data, ai2)) return;
-      paint(y * width + x, r, g);
-    };
     const paint = (i, r, g) => {
       if (r <= 0 && g <= 0) return;
       if (removed[i] === 0 && added[i] === 0) changed++;
       removed[i] = Math.max(removed[i], r);
       added[i] = Math.max(added[i], g);
     };
-    const edit = (b0, b1, a0, a1) => {
+    const compareRow = (y, other, start, step = 4) => {
+      for (let x = x0, oi = start; x < x1; x++, oi += step) {
+        const ai = (y * after.width + x) * 4;
+        const [r, g] = comparePixel(other, oi, after.data, ai);
+        if ((r > 0 || g > 0) && y < before.height && !differs(before.data, (y * before.width + x) * 4, after.data, ai)) continue;
+        paint(y * width + x, r, g);
+      }
+    };
+    const fromBefore = (y, b2) => compareRow(y, before.data, (b2 * before.width + x0) * 4);
+    const edit = ({ b0, b1, a0, a1 }) => {
       const common = Math.min(b1 - b0, a1 - a0);
-      for (let k = 0; k < common; k++) for (let x = x0; x < x1; x++) mark(x, a0 + k, before.data, ((b0 + k) * before.width + x) * 4);
-      if (b1 === before.height && a1 === after.height && before.height === after.height) return;
+      for (let k = 0; k < common; k++) fromBefore(a0 + k, b0 + k);
+      if (b1 === before.height && a1 === after.height && viewport) return;
       const grownFrom = a0 > 0 ? a0 - 1 : a1 < after.height ? a1 : -1;
-      const background = grownFrom < 0 && a1 > a0 + common ? commonColour(before, x0, x1) : null;
       for (let y = a0 + common; y < a1; y++) {
-        for (let x = x0; x < x1; x++) {
-          if (background) mark(x, y, background, 0);
-          else mark(x, y, after.data, (grownFrom * after.width + x) * 4);
-        }
+        if (grownFrom >= 0) compareRow(y, after.data, (grownFrom * after.width + x0) * 4);
+        else compareRow(y, commonColour(before, x0, x1), 0, 0);
       }
       if (b1 - b0 > common) markDeletion(before, after, b0 + common, b1, x0, x1, a1, width, (i) => paint(i, 1, 0));
     };
-    let bi = 0, ai = 0;
-    for (const [b, a] of [...pairs, [before.height, after.height]]) {
-      if (b > bi || a > ai) edit(bi, b, ai, a);
-      bi = b + 1;
-      ai = a + 1;
+    let b = 0, a = 0;
+    for (const hunk of [...hunks, { b0: before.height, b1: before.height, a0: after.height, a1: after.height }]) {
+      for (; a < hunk.a0 && b < hunk.b0; a++, b++) fromBefore(a, b);
+      edit(hunk);
+      b = hunk.b1;
+      a = hunk.a1;
     }
     return { removed, added, changed };
+  }
+  function toHunks(pairs, n, m) {
+    const hunks = [];
+    let b0 = 0, a0 = 0;
+    for (const [b, a] of [...pairs, [n, m]]) {
+      if (b > b0 || a > a0) hunks.push({ b0, b1: b, a0, a1: a });
+      b0 = b + 1;
+      a0 = a + 1;
+    }
+    return hunks;
+  }
+  function slideDeletions(hunks, beforeRows, plain, viewport) {
+    const n = beforeRows.length, m = plain.length;
+    return hunks.map((hunk, i) => {
+      if (hunk.a0 !== hunk.a1) return hunk;
+      const floor = i > 0 ? hunks[i - 1].b1 : 0, ceiling = i + 1 < hunks.length ? hunks[i + 1].b0 : n;
+      let up = 0, down = 0;
+      while (hunk.b0 - up > floor && beforeRows[hunk.b0 - up - 1] === beforeRows[hunk.b1 - up - 1]) up++;
+      while (hunk.b1 + down < ceiling && beforeRows[hunk.b0 + down] === beforeRows[hunk.b1 + down]) down++;
+      const at = (shift) => ({ b0: hunk.b0 + shift, b1: hunk.b1 + shift, a0: hunk.a0 + shift, a1: hunk.a1 + shift });
+      if (viewport && hunk.b1 + down === n) return at(down);
+      const inGap = [];
+      for (let shift = -up; shift <= down; shift++) {
+        const row = hunk.a0 + shift;
+        if (row > 0 && row < m && plain[row - 1] && plain[row]) inGap.push(shift);
+      }
+      return inGap.length ? at(inGap[Math.floor(inGap.length / 2)]) : hunk;
+    });
+  }
+  function plainRows({ data, width, height }, x0, x1) {
+    const plain = new Uint8Array(height);
+    for (let y = 0; y < height; y++) {
+      const first = (y * width + x0) * 4;
+      let same = true;
+      for (let i = first + 4, end = (y * width + x1) * 4; i < end && same; i += 4) {
+        same = data[i] === data[first] && data[i + 1] === data[first + 1] && data[i + 2] === data[first + 2];
+      }
+      plain[y] = same ? 1 : 0;
+    }
+    return plain;
   }
   function markDeletion(before, after, b0, b1, x0, x1, at, width, paint) {
     const below = Math.min(at, after.height - 1), above = Math.max(0, at - 1), top = Math.min(above, after.height - 2);
@@ -166,11 +209,6 @@
       }
       if (content) for (let y = top; y < top + 2; y++) paint(y * width + x);
     }
-  }
-  function rowsMatch(before, after, x0, x1) {
-    const margin = Math.min(EDGE_MARGIN, Math.floor((x1 - x0) * EDGE_SHARE));
-    const hb = rowHashes(before, x0 + margin, x1 - margin), ha = rowHashes(after, x0 + margin, x1 - margin);
-    return (b, a) => hb[b] === ha[a];
   }
   function rowHashes({ data, width, height }, x0, x1) {
     const hashes = new Int32Array(height);

@@ -33,14 +33,22 @@ test("an item added to a menu is the only change, not the items below it or the 
   assert.deepEqual(pixelBoxes(stats.regions, 300, 200), [[190, 50, 70, 8]]);
 });
 
-test("a block removed from a full-page capture is a rule where it was, and the rest closes up unmarked", () => {
+test("a block removed from a full-page capture is a rule in the middle of the gap it left, and the rest closes up unmarked", () => {
   const above: Rect[] = [[10, 10, 80, 10, INK], [10, 40, 60, 10, INK]];
   const below: Rect[] = [[10, 120, 70, 10, INK], [10, 160, 90, 10, INK]];
   const before = draw(120, 200, PAGE, [...above, [20, 80, 50, 20, 0x3050d0], ...below]);
   const after = draw(120, 170, PAGE, [...above, ...shift(below, -30)]);
   const { stats } = lineUpChanges(before, after);
   assert.equal(stats.moved, true);
-  assert.deepEqual(pixelBoxes(stats.regions, 120, 200), [[20, 69, 50, 2]]);
+  assert.deepEqual(pixelBoxes(stats.regions, 120, 200), [[20, 74, 50, 2]]);
+});
+
+test("a change at the edge of a row that otherwise matches still shows", () => {
+  const content: Rect[] = [[10, 10, 60, 8, INK], [10, 40, 180, 50, WHITE], [20, 50, 90, 10, INK], [20, 70, 50, 10, INK]];
+  const before = draw(200, 120, PAGE, [...content, [192, 52, 6, 8, INK]]);
+  const after = draw(200, 120, PAGE, [[0, 0, 200, 20, ORANGE], ...shift(content, 20), [192, 72, 6, 8, 0xd02020]]);
+  const { stats } = lineUpChanges(before, after);
+  assert.deepEqual(pixelBoxes(stats.regions, 200, 120), [[0, 0, 200, 20], [192, 72, 6, 8]]);
 });
 
 test("an edit in place is compared as placed", () => {
