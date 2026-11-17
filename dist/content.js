@@ -78,7 +78,7 @@
     });
     const expand = el("button", `${PREFIX}-expand`);
     expand.type = "button";
-    expand.textContent = "\u2922 Full screen";
+    expand.append(icon("screen-full"), "Full screen");
     expand.title = "Full screen: \u2190 \u2192 step through every pair on the page, Esc closes";
     const segmented = el("div", `${PREFIX}-segmented`);
     segmented.append(...modeButtons.map(({ button }) => button));
@@ -117,12 +117,20 @@
     const diff = el("div", `${PREFIX}-diff`);
     const canvas = el("div", `${PREFIX}-canvas`);
     canvas.append(after, before, diff);
-    frame.append(canvas, beforeTag, afterTag);
+    frame.append(canvas);
+    const legend = el("div", `${PREFIX}-legend`);
+    const flipHint = el("span", `${PREFIX}-flip-hint`);
+    flipHint.textContent = "Click to flip";
+    const notCompared = el("span", `${PREFIX}-not-compared`);
+    notCompared.textContent = "Not compared";
+    const middle = el("span", `${PREFIX}-legend-middle`);
+    middle.append(flipHint, notCompared);
+    legend.append(beforeTag, middle, afterTag);
     const canDiff = pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
     const same = el("p", `${PREFIX}-same`);
     same.hidden = true;
     same.textContent = "No visible difference. The same screenshot twice?";
-    root.append(frame, same);
+    root.append(legend, frame, same);
     if (pair.label) {
       const caption = el("figcaption", `${PREFIX}-label`);
       caption.textContent = pair.label;
@@ -136,8 +144,9 @@
       const beforeShown = shownSide();
       if (peeking && shown === "diff") shown = "flip";
       frame.dataset.mode = shown;
-      beforeTag.textContent = shown === "diff" ? "Before only" : "Before";
-      afterTag.textContent = shown === "diff" ? "After only" : "After";
+      legend.dataset.mode = shown;
+      beforeTag.textContent = shown === "diff" ? "Darker before" : "Before";
+      afterTag.textContent = shown === "diff" ? "Darker after" : "After";
       after.style.visibility = shown === "flip" && beforeShown ? "hidden" : "visible";
       if (shown === "diff") {
         if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
@@ -145,6 +154,7 @@
       } else if (shown === "flip") {
         before.style.opacity = beforeShown ? "1" : "0";
         frame.dataset.showing = beforeShown ? "before" : "after";
+        legend.dataset.showing = frame.dataset.showing;
       }
     }
     function shownSide() {
@@ -191,7 +201,7 @@
         render();
       }
     };
-    fitPair(root, frame, pair, (isSame) => same.hidden = !isSame);
+    fitPair(root, pair, (isSame) => same.hidden = !isSame);
     return stage;
   }
   var hovered = null;
@@ -269,7 +279,8 @@
       else alignBars.delete(frame);
     }
   }
-  function fitPair(root, frame, pair, showSame) {
+  function fitPair(root, pair, showSame) {
+    const frame = frameOf(root);
     let done = false;
     const apply = () => {
       const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
@@ -280,8 +291,8 @@
       const sameSize = bw === aw && bh === ah;
       const density = DENSITIES.some((d) => near(ratio, d) || near(1 / ratio, d));
       if (sameSize || density) {
-        frame.style.setProperty("--natural-width", `${aw}px`);
-        frame.style.setProperty("--aspect", String(aw / ah));
+        root.style.setProperty("--natural-width", `${aw}px`);
+        root.style.setProperty("--aspect", String(aw / ah));
         if (!sameSize) frame.dataset.resampled = "";
         const width = Math.min(bw, aw);
         const sameShape = Math.abs(bh * width / bw - ah * width / aw) <= 1;
@@ -292,17 +303,18 @@
         return;
       }
       if (bw === aw) {
-        frame.style.setProperty("--natural-width", `${aw}px`);
-        frame.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
+        root.dataset.partial = "1";
+        root.style.setProperty("--natural-width", `${aw}px`);
+        root.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
         if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
         askBackground("align", pair, (response) => {
           const p = response?.placement;
           if (!p || !p.beforeY && !p.afterY) return;
-          root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showSame, { placement: p, diff: response.diff, same: response.same }), frame.nextSibling);
+          root.insertBefore(buildAlignBar(root, pair, [bw, bh], [aw, ah], showSame, { placement: p, diff: response.diff, same: response.same }), frame.nextSibling);
         });
         return;
       }
-      root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showSame), frame.nextSibling);
+      root.insertBefore(buildAlignBar(root, pair, [bw, bh], [aw, ah], showSame), frame.nextSibling);
     };
     for (const media of [pair.before, pair.after]) {
       media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
@@ -321,19 +333,26 @@
   function naturalSize(media) {
     return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];
   }
-  function placeOnCanvas(frame, [bw, bh], [aw, ah], p) {
+  var frameOf = (stage) => stage.querySelector(`.${PREFIX}-frame`);
+  function placeOnCanvas(stage, [bw, bh], [aw, ah], p) {
     const width = Math.max(p.beforeX + bw, p.afterX + aw), height = Math.max(p.beforeY + bh, p.afterY + ah);
     const pct = (v) => `${v / width * 100}%`;
-    frame.style.setProperty("--natural-width", `${width}px`);
-    frame.style.setProperty("--aspect", String(width / height));
-    frame.style.setProperty("--before-w", pct(bw));
-    frame.style.setProperty("--after-w", pct(aw));
-    frame.style.setProperty("--before-x", pct(p.beforeX));
-    frame.style.setProperty("--after-x", pct(p.afterX));
-    frame.style.setProperty("--before-y", pct(p.beforeY));
-    frame.style.setProperty("--after-y", pct(p.afterY));
+    stage.style.setProperty("--natural-width", `${width}px`);
+    stage.style.setProperty("--aspect", String(width / height));
+    stage.style.setProperty("--before-w", pct(bw));
+    stage.style.setProperty("--after-w", pct(aw));
+    stage.style.setProperty("--before-x", pct(p.beforeX));
+    stage.style.setProperty("--after-x", pct(p.afterX));
+    stage.style.setProperty("--before-y", pct(p.beforeY));
+    stage.style.setProperty("--after-y", pct(p.afterY));
+    stage.dataset.partial = "1";
+    stage.style.setProperty("--after-clip", comparedPart([p.afterX, p.afterY, aw, ah], [p.beforeX, p.beforeY, bw, bh]));
   }
-  function buildAlignBar(frame, pair, beforeSize, afterSize, showSame, found) {
+  function comparedPart([x, y, w, h], [ox, oy, ow, oh]) {
+    const pct = (v, of) => `${Math.max(0, v) / of * 100}%`;
+    return `inset(${pct(oy - y, h)} ${pct(x + w - (ox + ow), w)} ${pct(y + h - (oy + oh), h)} ${pct(ox - x, w)})`;
+  }
+  function buildAlignBar(stage, pair, beforeSize, afterSize, showSame, found) {
     const [bw, bh] = beforeSize, [aw, ah] = afterSize;
     const slack = Math.abs(bw - aw), beforeNarrow = bw < aw;
     const images = canAutoAlign(pair);
@@ -358,8 +377,9 @@
     segmented.append(...buttons.map(({ button }) => button));
     const status = el("span", `${PREFIX}-align-note`);
     bar.append(note, segmented, status);
+    const frame = frameOf(stage);
     const placeSideways = (offset) => placeOnCanvas(
-      frame,
+      stage,
       beforeSize,
       afterSize,
       beforeNarrow ? { beforeX: offset, beforeY: 0, afterX: 0, afterY: 0 } : { beforeX: 0, beforeY: 0, afterX: offset, afterY: 0 }
@@ -374,6 +394,10 @@
       frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: url }));
     };
     let waitingForPermission = false;
+    let fellBack = false;
+    const press = (align) => {
+      for (const { align: buttonAlign, button } of buttons) button.setAttribute("aria-pressed", String(buttonAlign === align));
+    };
     const runAuto = () => {
       status.textContent = "Lining up\u2026";
       askBackground("align", pair, (response) => {
@@ -383,10 +407,13 @@
           autoDiff = response.diff;
           autoSame = response.same;
           waitingForPermission = false;
+          fellBack = false;
           sync2();
           return;
         }
         placeSideways(slack / 2);
+        fellBack = true;
+        press("center");
         if (response?.needsPermission) {
           waitingForPermission = true;
           const allow = el("button", `${PREFIX}-expand`);
@@ -394,9 +421,9 @@
           allow.textContent = "Turn on Auto-align";
           allow.title = "Opens Peekaboo's settings next to this tab; you come back here once it's on";
           allow.addEventListener("click", () => chrome.runtime.sendMessage({ type: "open-options" }));
-          status.append("Centred for now. Peekaboo can line them up exactly: ", allow);
+          status.append("Centered for now. Auto-align finds where they match: ", allow);
         } else {
-          status.textContent = "Couldn't line them up; centred instead.";
+          status.textContent = "Couldn't line them up; centered instead.";
         }
       });
     };
@@ -406,14 +433,14 @@
     const sync2 = () => {
       let current = images ? loadAlign() : loadAlign() === "auto" ? "left" : loadAlign();
       if (found && current !== "auto") current = "left";
-      for (const { align, button } of buttons) button.setAttribute("aria-pressed", String(align === current));
+      press(current === "auto" && fellBack ? "center" : current);
       if (current !== "auto") status.replaceChildren();
       showDiff(current === "auto" ? autoDiff : null);
       showSame(current === "auto" ? autoSame : null);
       if (current === "left") placeSideways(0);
       else if (current === "center") placeSideways(slack / 2);
       else if (current === "right") placeSideways(slack);
-      else if (autoPlacement) placeOnCanvas(frame, beforeSize, afterSize, autoPlacement);
+      else if (autoPlacement) placeOnCanvas(stage, beforeSize, afterSize, autoPlacement);
       else runAuto();
     };
     alignBars.set(frame, { sync: sync2, retryAuto });
@@ -459,9 +486,9 @@
     overlay.setAttribute("role", "dialog");
     overlay.setAttribute("aria-modal", "true");
     const bar = el("div", `${PREFIX}-viewer-bar`);
-    const previous = navButton("\u2039", "Previous pair (\u2190)", () => stepViewer(-1));
+    const previous = navButton("chevron-left", "Previous pair (\u2190)", () => stepViewer(-1));
     const counter = el("span", `${PREFIX}-viewer-counter`);
-    const next = navButton("\u203A", "Next pair (\u2192)", () => stepViewer(1));
+    const next = navButton("chevron-right", "Next pair (\u2192)", () => stepViewer(1));
     const segmented = el("div", `${PREFIX}-segmented`);
     const modeButtons = VIEWER_MODES.map(({ mode, label, hint }, index) => {
       const button = el("button", `${PREFIX}-mode`);
@@ -472,7 +499,7 @@
       return { mode, button };
     });
     segmented.append(...modeButtons.map(({ button }) => button));
-    const close = navButton("\u2715", "Close (Esc)", closeViewer);
+    const close = navButton("x", "Close (Esc)", closeViewer);
     close.classList.add(`${PREFIX}-viewer-close`);
     bar.append(previous, counter, next, segmented, close);
     const title = el("div", `${PREFIX}-viewer-title`);
@@ -481,13 +508,15 @@
     const caption = el("p", `${PREFIX}-viewer-caption`);
     column.append(caption);
     body.append(column);
-    overlay.append(bar, title, body, buildKeyHints());
+    const keys = buildKeyHints();
+    overlay.append(bar, title, body, keys.row);
     document.body.append(overlay);
     document.documentElement.classList.add(`${PREFIX}-locked`);
-    viewer = { overlay, body, counter, title, caption, modeButtons, slides, index: -1, placeholder: document.createComment("peekaboo") };
+    viewer = { overlay, body, counter, title, caption, modeButtons, keys, slides, index: -1, placeholder: document.createComment("peekaboo") };
     overlay.addEventListener("mousedown", (event) => {
       if (event.target.closest("button")) event.preventDefault();
     });
+    overlay.addEventListener("keydown", keepFocusInside);
     if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
     syncViewerModes();
     showSlide(Math.max(0, slides.indexOf(start)));
@@ -505,7 +534,8 @@
     viewer.caption.textContent = slide.caption;
     viewer.caption.hidden = !slide.caption;
     viewer.body.classList.toggle(`${PREFIX}-has-caption`, Boolean(slide.caption));
-    slide.stage.querySelector(`.${PREFIX}-frame`)?.focus({ preventScroll: true });
+    syncKeyHints();
+    frameOf(slide.stage).focus({ preventScroll: true });
   }
   function stepViewer(delta) {
     if (!viewer) return;
@@ -524,11 +554,28 @@
     document.documentElement.classList.remove(`${PREFIX}-locked`);
     viewer = null;
     lastStage?.scrollIntoView({ block: "center" });
+    lastStage?.closest(`.${PREFIX}`)?.querySelector(`.${PREFIX}-toolbar > .${PREFIX}-expand:not([hidden])`)?.focus({ preventScroll: true });
+  }
+  function keepFocusInside(event) {
+    if (event.key !== "Tab" || !viewer) return;
+    const stops = Array.from(viewer.overlay.querySelectorAll(`button, .${PREFIX}-frame`)).filter((node) => node.getClientRects().length > 0);
+    const first = stops[0], last = stops[stops.length - 1];
+    const leaving = event.shiftKey ? document.activeElement === first : document.activeElement === last;
+    if (!leaving && viewer.overlay.contains(document.activeElement)) return;
+    event.preventDefault();
+    (event.shiftKey ? last : first)?.focus();
   }
   function syncViewerModes() {
     if (!viewer) return;
     const current = loadMode();
     for (const { mode, button } of viewer.modeButtons) button.setAttribute("aria-pressed", String(mode === current));
+    syncKeyHints();
+  }
+  function syncKeyHints() {
+    if (!viewer || viewer.index < 0) return;
+    const diff = frameOf(viewer.slides[viewer.index].stage).dataset.mode === "diff";
+    viewer.keys.flip.hidden = diff;
+    viewer.keys.peekAction.textContent = diff ? " hold for After" : " hold to peek";
   }
   function handleViewerKeys(event) {
     if (!viewer) return;
@@ -560,21 +607,23 @@
     const row = el("div", `${PREFIX}-viewer-keys`);
     const hint = (keys, action) => {
       const item = el("span", `${PREFIX}-viewer-key`);
-      for (const key of keys) item.append(Object.assign(el("kbd", ""), { textContent: key }));
-      item.append(` ${action}`);
+      for (const key of keys) item.append(Object.assign(el("kbd", /^[←→↑↓]$/.test(key) ? `${PREFIX}-arrow` : ""), { textContent: key }));
+      const text = document.createTextNode(` ${action}`);
+      item.append(text);
       row.append(item);
+      return { item, text };
     };
     hint(["\u2190", "\u2192"], "pair");
-    hint(["Space"], "flip");
-    hint(["Shift"], "hold to peek");
+    const flip = hint(["Space"], "flip").item;
+    const peekAction = hint(["Shift"], "hold to peek").text;
     hint(VIEWER_MODES.map((_, index) => String(index + 1)), VIEWER_MODES.map(({ label }) => label).join(" / "));
     hint(["Esc"], "close");
-    return row;
+    return { row, flip, peekAction };
   }
-  function navButton(text, title, onClick) {
+  function navButton(name, title, onClick) {
     const button = el("button", `${PREFIX}-nav`);
     button.type = "button";
-    button.textContent = text;
+    button.append(icon(name));
     button.title = title;
     button.setAttribute("aria-label", title);
     button.addEventListener("click", onClick);
@@ -601,6 +650,24 @@
     syncViewerModes();
     if (anchor && topBefore !== void 0) window.scrollBy(0, anchor.getBoundingClientRect().top - topBefore);
   }
+  var ICONS = {
+    "chevron-left": "M9.78 12.78a.75.75 0 0 1-1.06 0L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L6.06 8l3.72 3.72a.75.75 0 0 1 0 1.06Z",
+    "chevron-right": "M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z",
+    "arrow-up": "M3.47 7.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018L9 4.81v7.44a.75.75 0 0 1-1.5 0V4.81L4.53 7.78a.75.75 0 0 1-1.06 0Z",
+    "arrow-down": "M13.03 8.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.47 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018l2.97 2.97V3.75a.75.75 0 0 1 1.5 0v7.44l2.97-2.97a.75.75 0 0 1 1.06 0Z",
+    x: "M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z",
+    "screen-full": "M1.75 10a.75.75 0 0 1 .75.75v2.5c0 .138.112.25.25.25h2.5a.75.75 0 0 1 0 1.5h-2.5A1.75 1.75 0 0 1 1 13.25v-2.5a.75.75 0 0 1 .75-.75Zm12.5 0a.75.75 0 0 1 .75.75v2.5A1.75 1.75 0 0 1 13.25 15h-2.5a.75.75 0 0 1 0-1.5h2.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 .75-.75ZM2.75 2.5a.25.25 0 0 0-.25.25v2.5a.75.75 0 0 1-1.5 0v-2.5C1 1.784 1.784 1 2.75 1h2.5a.75.75 0 0 1 0 1.5ZM10.75 1h2.5c.966 0 1.75.784 1.75 1.75v2.5a.75.75 0 0 1-1.5 0v-2.5a.25.25 0 0 0-.25-.25h-2.5a.75.75 0 0 1 0-1.5Z"
+  };
+  function icon(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 16 16");
+    svg.setAttribute("aria-hidden", "true");
+    svg.classList.add(`${PREFIX}-icon`);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", ICONS[name]);
+    svg.append(path);
+    return svg;
+  }
   function tag(text, side) {
     const node = el("span", `${PREFIX}-tag ${PREFIX}-tag-${side}`);
     node.textContent = text;
@@ -614,7 +681,10 @@
   function injectStyles() {
     const style = document.createElement("style");
     style.textContent = `
-.${PREFIX} { margin-bottom: 8px; }
+/* GitHub's markdown gives the table it stands in for a 16px bottom margin. */
+.${PREFIX} { margin-bottom: 16px; }
+/* In Side by side the widget is only the toolbar, whose own 8px is the gap to GitHub's table. */
+.${PREFIX}[data-mode="table"] { margin-bottom: 0; }
 /* Our display rules would otherwise beat the hidden attribute on pages without a global [hidden] reset. */
 .${PREFIX} [hidden], .${PREFIX}-viewer [hidden] { display: none !important; }
 .${PREFIX}-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
@@ -626,11 +696,19 @@
 .${PREFIX}-mode + .${PREFIX}-mode { border-left: 1px solid var(--borderColor-default, #d1d9e0); }
 .${PREFIX}-mode[aria-pressed="true"] { background: var(--bgColor-accent-emphasis, #0969da); color: var(--fgColor-onEmphasis, #fff); }
 .${PREFIX}-expand { border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; }
-.${PREFIX}-mode:hover:not([aria-pressed="true"]), .${PREFIX}-expand:hover { background: var(--bgColor-muted, #f6f8fa); }
+/* GitHub's own button states: --bgColor-muted is nearly the page colour, so a hover on it is invisible in dark. */
+.${PREFIX}-mode:hover:not([aria-pressed="true"]), .${PREFIX}-expand:hover, .${PREFIX}-nav:hover { background: var(--button-default-bgColor-hover, #eff2f5); }
+.${PREFIX}-mode:active:not([aria-pressed="true"]), .${PREFIX}-expand:active, .${PREFIX}-nav:active { background: var(--button-default-bgColor-active, #e6eaef); }
+.${PREFIX}-mode:focus-visible, .${PREFIX}-expand:focus-visible, .${PREFIX}-nav:focus-visible { outline: 2px solid var(--focus-outlineColor, #0969da); outline-offset: -2px; }
+/* The pressed fill is the focus colour, so a ring in it would vanish. */
+.${PREFIX}-mode[aria-pressed="true"]:focus-visible { outline-color: var(--fgColor-onEmphasis, #fff); }
+.${PREFIX}-expand { display: inline-flex; align-items: center; gap: 6px; }
+.${PREFIX}-icon { width: 16px; height: 16px; fill: currentColor; flex-shrink: 0; }
 .${PREFIX}-view { display: flex; flex-direction: column; gap: 16px; }
 .${PREFIX}-stage { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.${PREFIX}-frame, .${PREFIX}-legend { width: 100%; max-width: var(--natural-width, 100%); }
 .${PREFIX}-frame {
-  position: relative; display: grid; width: 100%; max-width: var(--natural-width, 100%);
+  position: relative; display: grid;
   border: 1px solid var(--borderColor-default, #d1d9e0); border-radius: 6px; overflow: hidden;
   background: var(--bgColor-muted, #f6f8fa); touch-action: none; user-select: none; outline-offset: 2px;
 }
@@ -640,15 +718,21 @@
 .${PREFIX}-frame .${PREFIX}-media[data-from="before"] { width: var(--before-w, 100%); justify-self: start; margin: var(--before-y, 0%) 0 0 var(--before-x, 0%); }
 .${PREFIX}-frame .${PREFIX}-media[data-from="after"] { width: var(--after-w, 100%); justify-self: start; margin: var(--after-y, 0%) 0 0 var(--after-x, 0%); }
 .${PREFIX}-align { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
-.${PREFIX}-tag {
-  position: absolute; top: 8px; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
-  background: rgb(0 0 0 / 0.65); color: #fff; pointer-events: none;
-}
-.${PREFIX}-tag-before { left: 8px; }
-.${PREFIX}-tag-after { right: 8px; }
-.${PREFIX}-frame[data-mode="flip"] .${PREFIX}-tag { left: 8px; right: auto; }
-.${PREFIX}-frame[data-mode="flip"][data-showing="before"] .${PREFIX}-tag-after,
-.${PREFIX}-frame[data-mode="flip"][data-showing="after"] .${PREFIX}-tag-before { display: none; }
+/* Before on the left, After on the right, like GitHub's own 2-up. In Flip the side on screen is underlined. */
+.${PREFIX}-legend { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; line-height: 20px; color: var(--fgColor-muted, #59636e); }
+.${PREFIX}-legend[data-mode="flip"][data-showing="before"] .${PREFIX}-tag-before,
+.${PREFIX}-legend[data-mode="flip"][data-showing="after"] .${PREFIX}-tag-after { color: var(--fgColor-default, #1f2328); box-shadow: inset 0 -2px var(--borderColor-accent-emphasis, #0969da); }
+.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-before { color: var(--fgColor-danger, #d1242f); }
+.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-after { color: var(--fgColor-success, #1a7f37); }
+.${PREFIX}-legend-middle { display: grid; font-weight: 400; }
+.${PREFIX}-flip-hint, .${PREFIX}-not-compared { grid-area: 1 / 1; justify-self: center; visibility: hidden; }
+.${PREFIX}-legend[data-mode="flip"] .${PREFIX}-flip-hint { visibility: visible; }
+/* Full screen has its own key row. */
+.${PREFIX}-viewer-body .${PREFIX}-legend .${PREFIX}-flip-hint { visibility: hidden; }
+.${PREFIX}-not-compared { display: inline-flex; align-items: center; gap: 6px; }
+/* A patch of the frame's own hatch; a bordered square would read as a checkbox. */
+.${PREFIX}-not-compared::before { content: ""; width: 16px; height: 10px; box-shadow: inset 0 0 0 1px var(--borderColor-muted, #d1d9e0b3); background: var(--${PREFIX}-hatch); }
+.${PREFIX}-stage[data-partial] .${PREFIX}-legend[data-mode="diff"] .${PREFIX}-not-compared { visibility: visible; }
 .${PREFIX}-diff, .${PREFIX}-diff-layer { grid-area: 1 / 1; display: grid; pointer-events: none; }
 .${PREFIX}-diff-layer { isolation: isolate; opacity: 0.8; }
 .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed); }
@@ -657,9 +741,18 @@
 .${PREFIX}-frame[data-resampled] .${PREFIX}-diff-added { filter: url(#${PREFIX}-added-resampled); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
 .${PREFIX}-diff-image { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
-.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1); opacity: 0.25; }
-.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-before { background: rgb(219 36 46); }
-.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-tag-after { background: rgb(26 160 77); }
+/* Opaque, so the hatch below shows only where After doesn't cover (not compared); same look as 25% over white. */
+.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1) contrast(0.143) brightness(1.75); clip-path: var(--after-clip, none); }
+/* The filter above makes the ghost a stacking context, which paints over plain siblings: lift the colours over it. */
+.${PREFIX}-diff { z-index: 1; }
+/* The ghost fades toward white in both themes: over a dark page it turned into a grey slab the red and green lost contrast on. */
+.${PREFIX}, .${PREFIX}-viewer { --${PREFIX}-hatch: repeating-linear-gradient(-45deg, #fff 0 5px, #d8dee4 5px 6px); }
+.${PREFIX}-frame[data-mode="diff"] { background: var(--${PREFIX}-hatch); }
+/* Scaled to a fractional device pixel ratio, an image's edge pixels are partly transparent, and the blend turns
+   that into a false "changed" outline. Clipping the blended group (not each copy, which moves
+   the edge inward instead) trims it. 2px, because the filter's 1px dilate runs before the clip. A real change only in
+   the outermost 2px no longer shows. */
+.${PREFIX}-diff-layer { clip-path: inset(2px); }
 .${PREFIX}-label { font-size: 12px; color: var(--fgColor-muted, #59636e); }
 .${PREFIX}-same { margin: 0; font-size: 12px; color: var(--fgColor-attention, #9a6700); font-weight: 600; }
 
@@ -673,23 +766,24 @@
 .${PREFIX}-viewer-bar > * { flex-shrink: 0; }
 .${PREFIX}-viewer-counter { min-width: 56px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--fgColor-muted, #59636e); }
 .${PREFIX}-nav {
-  font: inherit; font-size: 18px; line-height: 1; width: 32px; height: 28px; cursor: pointer; border-radius: 6px;
+  font: inherit; line-height: 1; width: 32px; height: 28px; cursor: pointer; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
   color: var(--fgColor-default, #1f2328); background: var(--bgColor-default, #fff); border: 1px solid var(--borderColor-default, #d1d9e0);
 }
-.${PREFIX}-nav:hover { background: var(--bgColor-muted, #f6f8fa); }
 .${PREFIX}-viewer-bar .${PREFIX}-segmented { margin-left: 8px; }
 .${PREFIX}-viewer-keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; font-size: 12px; color: var(--fgColor-muted, #59636e); }
-.${PREFIX}-viewer-key { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.${PREFIX}-viewer-key { display: inline-flex; align-items: baseline; gap: 3px; white-space: nowrap; }
 .${PREFIX}-viewer-key kbd {
   font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 18px; padding: 0 4px; text-align: center;
   border: 1px solid var(--borderColor-default, #d1d9e0); border-bottom-width: 2px; border-radius: 4px;
   background: var(--bgColor-muted, #f6f8fa); color: var(--fgColor-default, #1f2328);
 }
-.${PREFIX}-viewer-close { margin-left: auto; font-size: 14px; }
+.${PREFIX}-viewer-key kbd.${PREFIX}-arrow { font-family: inherit; font-size: 12px; }
+.${PREFIX}-viewer-close { margin-left: auto; }
 .${PREFIX}-viewer-title { font-weight: 600; text-align: center; }
 .${PREFIX}-viewer-column { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
 .${PREFIX}-viewer-caption {
-  margin: 0; max-width: min(900px, 100%); text-align: center; font-size: 15px; line-height: 1.5;
+  margin: 0; max-width: min(900px, 100%); text-align: center; font-size: 15px; line-height: 1.5; text-wrap: balance;
   color: var(--fgColor-default, #1f2328); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .${PREFIX}-viewer-body { flex: 1; min-height: 0; display: flex; justify-content: center; align-items: safe center; overflow: auto; container-type: size; }
@@ -697,7 +791,9 @@
 .${PREFIX}-viewer-body .${PREFIX}-stage { align-items: center; width: 100%; }
 .${PREFIX}-viewer-body .${PREFIX}-label { display: none; }
 /* Full screen fills the space, upscaling small crops: sized from the viewer's own box, not vh, so page zoom can't overflow it. */
-.${PREFIX}-viewer-body .${PREFIX}-frame { max-width: none; width: min(100cqw, calc((100cqh - var(--caption-room, 0px) - var(--same-room, 0px)) * var(--aspect, 1.6))); }
+.${PREFIX}-viewer-body .${PREFIX}-frame, .${PREFIX}-viewer-body .${PREFIX}-legend { max-width: none; width: min(100cqw, calc((100cqh - var(--legend-room) - var(--caption-room, 0px) - var(--same-room, 0px)) * var(--aspect, 1.6))); }
+/* The legend's 20px line plus the stage's 6px gap. */
+.${PREFIX}-viewer-body { --legend-room: 26px; }
 .${PREFIX}-viewer-body:has(.${PREFIX}-same:not([hidden])) { --same-room: 24px; }
 /* Room for up to three caption lines, so the image shrinks instead of pushing the caption off screen. */
 .${PREFIX}-has-caption { --caption-room: 92px; }
