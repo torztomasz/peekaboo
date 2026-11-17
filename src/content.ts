@@ -416,7 +416,10 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: S
       frame.style.setProperty("--aspect", String(aw / ah));
       if (!sameSize) frame.dataset.resampled = "";
       // At two densities the compositor Diff marks every resampled edge, so the worker's diff replaces it.
-      if (canAutoAlign(pair)) askBackground("compare", pair, (response) => {
+      // The worker compares only where both reach, so a capture that also holds more of the page keeps
+      // the compositor Diff rather than be called unchanged.
+      const sameShape = near(ah / bh, ratio);
+      if (canAutoAlign(pair) && sameShape) askBackground("compare", pair, (response) => {
         if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
         showStats(response?.stats ?? null);
       });

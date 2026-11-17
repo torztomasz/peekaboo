@@ -308,7 +308,8 @@
         frame.style.setProperty("--natural-width", `${aw}px`);
         frame.style.setProperty("--aspect", String(aw / ah));
         if (!sameSize) frame.dataset.resampled = "";
-        if (canAutoAlign(pair)) askBackground("compare", pair, (response) => {
+        const sameShape = near(ah / bh, ratio);
+        if (canAutoAlign(pair) && sameShape) askBackground("compare", pair, (response) => {
           if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
           showStats2(response?.stats ?? null);
         });
