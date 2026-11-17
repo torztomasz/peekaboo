@@ -47,6 +47,7 @@ function main() {
   new MutationObserver(scheduleSync).observe(document.body, { childList: true, subtree: true });
   // Capture phase, so full-screen keys win over anything focused on the page.
   document.addEventListener("keydown", handleViewerKeys, true);
+  document.addEventListener("keydown", keepFocusInside, true);
   document.addEventListener("keydown", (event) => event.key === "Shift" && !event.repeat && startPeek(event), true);
   document.addEventListener("keyup", (event) => event.key === "Shift" && endPeek(), true);
   window.addEventListener("blur", endPeek);
@@ -317,7 +318,6 @@ function diffLayer([darker, darkerSide]: Sided, [other, otherSide]: Sided, kind:
 }
 
 const DIFF_COLORS = { removed: [0.86, 0.14, 0.18], added: [0.1, 0.72, 0.3] };
-const rgb = (color: number[]) => `rgb(${color.map((channel) => Math.round(channel * 255)).join(" ")})`;
 
 function ensureDiffFilters() {
   if (document.getElementById(`${PREFIX}-filters`)) return;
@@ -420,9 +420,9 @@ function fitPair(root: HTMLElement, pair: Pair, showSame: ShowSame) {
     // Same width, different heights: usually a page that got longer or shorter, so top-aligned is right
     // and edge buttons would do nothing. Only a crop of the other (found by Auto) earns the bar.
     if (bw === aw) {
-      root.dataset.partial = "1";
       root.style.setProperty("--natural-width", `${aw}px`);
       root.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
+      clipToCompared(root, [0, 0, bw, bh], [0, 0, aw, ah]);
       if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
       askBackground("align", pair, (response) => {
         showTone(frame, response?.dark);
@@ -473,12 +473,22 @@ function placeOnCanvas(stage: HTMLElement, [bw, bh]: number[], [aw, ah]: number[
   stage.style.setProperty("--before-w", pct(bw)); stage.style.setProperty("--after-w", pct(aw));
   stage.style.setProperty("--before-x", pct(p.beforeX)); stage.style.setProperty("--after-x", pct(p.afterX));
   stage.style.setProperty("--before-y", pct(p.beforeY)); stage.style.setProperty("--after-y", pct(p.afterY));
-  stage.dataset.partial = "1";
-  stage.style.setProperty("--after-clip", comparedPart([p.afterX, p.afterY, aw, ah], [p.beforeX, p.beforeY, bw, bh]));
+  clipToCompared(stage, [p.beforeX, p.beforeY, bw, bh], [p.afterX, p.afterY, aw, ah]);
 }
 
-// Diff shows the After ghost only where Before is too, so the hatch behind it marks everything not compared.
-function comparedPart([x, y, w, h]: number[], [ox, oy, ow, oh]: number[]) {
+// Diff shows the After ghost and its colours only where both screenshots are, so the hatch behind them marks
+// everything not compared. Rects are [x, y, width, height] on the shared canvas.
+function clipToCompared(stage: HTMLElement, before: number[], after: number[]) {
+  const x = Math.max(before[0], after[0]), y = Math.max(before[1], after[1]);
+  const both = [x, y, Math.min(before[0] + before[2], after[0] + after[2]) - x, Math.min(before[1] + before[3], after[1] + after[3]) - y];
+  const canvas = [0, 0, Math.max(before[0] + before[2], after[0] + after[2]), Math.max(before[1] + before[3], after[1] + after[3])];
+  stage.dataset.partial = "1";
+  stage.style.setProperty("--after-clip", insetTo(after, both));
+  stage.style.setProperty("--diff-clip", insetTo(canvas, both));
+}
+
+// The clip-path inset that shows only `inner` of the box `[x, y, w, h]`.
+function insetTo([x, y, w, h]: number[], [ox, oy, ow, oh]: number[]) {
   const pct = (v: number, of: number) => `${(Math.max(0, v) / of) * 100}%`;
   return `inset(${pct(oy - y, h)} ${pct(x + w - (ox + ow), w)} ${pct(y + h - (oy + oh), h)} ${pct(ox - x, w)})`;
 }
@@ -538,6 +548,7 @@ function buildAlignBar(stage: HTMLElement, pair: Pair, beforeSize: number[], aft
         sync();
         return;
       }
+      if (loadAlign() !== "auto") return;
       placeSideways(slack / 2);
       fellBack = true;
       press("center");
@@ -624,6 +635,7 @@ let viewer: {
   slides: Slide[];
   index: number;
   placeholder: Comment;
+  opener: Element | null;
 } | null = null;
 
 function openViewer(start: Slide) {
@@ -663,12 +675,11 @@ function openViewer(start: Slide) {
   document.body.append(overlay);
   document.documentElement.classList.add(`${PREFIX}-locked`);
 
-  viewer = { overlay, body, counter, title, caption, modeButtons, keys, slides, index: -1, placeholder: document.createComment("peekaboo") };
+  viewer = { overlay, body, counter, title, caption, modeButtons, keys, slides, index: -1, placeholder: document.createComment("peekaboo"), opener: document.activeElement };
   // A clicked button would keep focus and swallow Space, which flips; buttons reached with Tab still take it.
   overlay.addEventListener("mousedown", (event) => {
     if ((event.target as Element).closest("button")) event.preventDefault();
   });
-  overlay.addEventListener("keydown", keepFocusInside);
   if (loadMode() === "table") setModeEverywhere(DEFAULT_MODE);
   syncViewerModes();
   showSlide(Math.max(0, slides.indexOf(start)));
@@ -707,12 +718,21 @@ function closeViewer() {
   if (!viewer) return;
   returnStage();
   const lastStage = viewer.index >= 0 ? viewer.slides[viewer.index].stage : null;
+  const { opener } = viewer;
   viewer.overlay.remove();
   document.documentElement.classList.remove(`${PREFIX}-locked`);
   viewer = null;
-  lastStage?.scrollIntoView({ block: "center" });
-  // Back where keyboard users left off: the Full screen button of the table that pair belongs to.
-  lastStage?.closest(`.${PREFIX}`)?.querySelector<HTMLElement>(`.${PREFIX}-toolbar > .${PREFIX}-expand:not([hidden])`)?.focus({ preventScroll: true });
+  // Instant, so where things end up is known before choosing what to focus (GitHub scrolls smoothly).
+  lastStage?.scrollIntoView({ block: "center", behavior: "instant" });
+  // Keyboard users carry on from where they are: what opened the viewer if it's still on screen after that
+  // scroll, otherwise the pair they closed on.
+  (onScreen(opener) ? (opener as HTMLElement) : lastStage && frameOf(lastStage))?.focus({ preventScroll: true });
+}
+
+function onScreen(node: Element | null) {
+  if (!(node instanceof HTMLElement) || !node.isConnected) return false;
+  const { top, bottom } = node.getBoundingClientRect();
+  return bottom > 0 && top < innerHeight;
 }
 
 // A modal dialog: Tab and Shift+Tab cycle through its own controls instead of walking into the page behind it.
@@ -839,8 +859,6 @@ function setModeEverywhere(mode: Mode, anchor?: HTMLElement) {
 const ICONS = {
   "chevron-left": "M9.78 12.78a.75.75 0 0 1-1.06 0L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L6.06 8l3.72 3.72a.75.75 0 0 1 0 1.06Z",
   "chevron-right": "M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z",
-  "arrow-up": "M3.47 7.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018L9 4.81v7.44a.75.75 0 0 1-1.5 0V4.81L4.53 7.78a.75.75 0 0 1-1.06 0Z",
-  "arrow-down": "M13.03 8.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.47 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018l2.97 2.97V3.75a.75.75 0 0 1 1.5 0v7.44l2.97-2.97a.75.75 0 0 1 1.06 0Z",
   x: "M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z",
   "screen-full": "M1.75 10a.75.75 0 0 1 .75.75v2.5c0 .138.112.25.25.25h2.5a.75.75 0 0 1 0 1.5h-2.5A1.75 1.75 0 0 1 1 13.25v-2.5a.75.75 0 0 1 .75-.75Zm12.5 0a.75.75 0 0 1 .75.75v2.5A1.75 1.75 0 0 1 13.25 15h-2.5a.75.75 0 0 1 0-1.5h2.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 .75-.75ZM2.75 2.5a.25.25 0 0 0-.25.25v2.5a.75.75 0 0 1-1.5 0v-2.5C1 1.784 1.784 1 2.75 1h2.5a.75.75 0 0 1 0 1.5ZM10.75 1h2.5c.966 0 1.75.784 1.75 1.75v2.5a.75.75 0 0 1-1.5 0v-2.5a.25.25 0 0 0-.25-.25h-2.5a.75.75 0 0 1 0-1.5Z",
 };
@@ -919,8 +937,9 @@ function injectStyles() {
 .${PREFIX}-legend[data-mode="flip"] .${PREFIX}-tag-after { color: var(--fgColor-accent, #0969da); background: var(--bgColor-accent-muted, #ddf4ff); }
 /* Diff: a swatch of each colour the frame paints, so the key reads by colour rather than by the word. */
 .${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag { display: inline-flex; align-items: center; gap: 6px; color: var(--fgColor-default, #1f2328); }
-.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: ${rgb(DIFF_COLORS.removed)}; }
-.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-after::before { background: ${rgb(DIFF_COLORS.added)}; }
+/* DIFF_COLORS in 0–255; that const isn't initialised yet when main() injects these styles. */
+.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: rgb(219 36 46); }
+.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-after::before { background: rgb(26 184 77); }
 .${PREFIX}-flip-hint, .${PREFIX}-not-compared { display: none; font-weight: 400; }
 .${PREFIX}-legend[data-mode="flip"] .${PREFIX}-flip-hint { display: inline; }
 /* Full screen has its own key row. */
@@ -940,10 +959,11 @@ function injectStyles() {
 .${PREFIX}-frame[data-resampled][data-tone="dark"] .${PREFIX}-diff-added { filter: url(#${PREFIX}-removed-resampled); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
 .${PREFIX}-diff-image { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
-/* Opaque, so the hatch below shows only where After doesn't cover (not compared); same look as 25% over white. */
-.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1) contrast(0.143) brightness(1.75); clip-path: var(--after-clip, none); }
+/* Opaque (same look as 25% over white, white under transparent screenshots too) and clipped to the overlap, so
+   the hatch behind shows exactly what wasn't compared. */
+.${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1) contrast(0.143) brightness(1.75); clip-path: var(--after-clip, none); background: #fff; }
 /* The filter above makes the ghost a stacking context, which paints over plain siblings: lift the colours over it. */
-.${PREFIX}-diff { z-index: 1; }
+.${PREFIX}-diff { z-index: 1; clip-path: var(--diff-clip, none); }
 /* The ghost fades toward white in both themes: over a dark page it turned into a grey slab the red and green lost contrast on. */
 .${PREFIX}, .${PREFIX}-viewer { --${PREFIX}-hatch: repeating-linear-gradient(-45deg, #fff 0 5px, #d8dee4 5px 6px); }
 .${PREFIX}-frame[data-mode="diff"] { background: var(--${PREFIX}-hatch); }
