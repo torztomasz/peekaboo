@@ -4,15 +4,11 @@
 
 import { IMAGE_ORIGINS } from "./origins";
 import { FULL_SIZE_ROWS, type Gray, locate } from "./match";
+import { AS_IS, type ChangeMaps, changeMaps, lineUpChanges, type Pixels, type Placement, type Stats } from "./changes";
 
 type PairRequest = { type: "align" | "compare"; before: string; after: string };
-type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
-// `changed` of `compared` pixels differ visibly (by the same rule that colours the diff).
-// `regions` are the separate places that changed, as fractions of the shared canvas, top to bottom.
-type Stats = { changed: number; compared: number; regions: Region[] };
-type Region = { x: number; y: number; w: number; h: number };
 type AlignResponse = { placement: Placement; diff: string; stats: Stats | null } | { needsPermission: true } | { error: string };
-type CompareResponse = { stats: Stats } | { needsPermission: true } | { error: string };
+type CompareResponse = { stats: Stats; diff: string | null } | { needsPermission: true } | { error: string };
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
   if (message?.type === "align" || message?.type === "compare") {
@@ -40,8 +36,9 @@ function openSettings(tab?: chrome.tabs.Tab) {
 // Where each screenshot sits on a shared canvas, in their own (equal) pixel scale.
 // First: is one a crop of the other (a viewport inside a full page, a detail inside a screen)? Then it is
 // placed where it matches, in both directions, but only on a near-perfect match: a loose fit would line up
-// the wrong part of a page whose layout really shifted, and hide that shift. Otherwise the screenshots are
-// two window widths of one page: top-aligned, the narrower slid sideways to where the two match best.
+// the wrong part of a page whose layout really shifted, and hide that shift. Otherwise, at one width, the
+// page got longer or shorter: top-aligned, with what moved lined up row by row for the diff. At two widths
+// they are two windows on one page: top-aligned, the narrower slid sideways to where the two match best.
 const CONTAINED_MAX_ERROR = 6;
 
 async function findOffset({ before, after }: PairRequest): Promise<AlignResponse> {
@@ -60,24 +57,29 @@ async function findOffset({ before, after }: PairRequest): Promise<AlignResponse
       exact = true;
     }
   }
+  if (!placement && b.width === a.width) {
+    const changes = lineUpChanges(pixels(b), pixels(a));
+    return { placement: AS_IS, diff: await diffImage(changes), stats: changes.stats };
+  }
   if (!placement) {
     const beforeIsWide = b.width >= a.width;
     const dx = slideSideways(beforeIsWide ? b : a, beforeIsWide ? a : b);
     placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
   }
-  const changes = changeMaps(b, a, placement);
+  const changes = changeMaps(pixels(b), pixels(a), placement);
   return { placement, diff: await diffImage(changes), stats: exact ? changes.stats : null };
 }
 
-// Same-size pairs line up as they are, so the page only needs to know how much changed. It's the cheap
-// way to catch the same screenshot uploaded twice, which Diff would show as a reassuring blank.
-const AS_IS: Placement = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
-
+// Same-size pairs line up as they are, unless something pushed the rest down. The page needs to know how
+// much changed: the cheap way to catch the same screenshot uploaded twice, which Diff would show as a
+// reassuring blank. When rows were lined up, the compositor's as-placed diff would colour everything that
+// moved, so the lined-up one comes along.
 async function compare({ before, after }: PairRequest): Promise<CompareResponse> {
   if (!(await chrome.permissions.contains({ origins: IMAGE_ORIGINS }))) return { needsPermission: true };
   const [b, a] = await Promise.all([load(before), load(after)]);
   if (b.width !== a.width || b.height !== a.height) return { error: "sizes differ" };
-  return { stats: changeMaps(b, a, AS_IS).stats };
+  const changes = lineUpChanges(pixels(b), pixels(a));
+  return { stats: changes.stats, diff: changes.stats.moved ? await diffImage(changes) : null };
 }
 
 function slideSideways(wide: ImageBitmap, narrow: ImageBitmap) {
@@ -129,89 +131,14 @@ function bestOffset(wide: Gray, narrow: Gray, slack: number, overhang: number, f
 
 // The diff at full resolution, from real pixels: the compositor version shows edges wherever the two
 // images are resampled at different sub-pixel offsets, which is always the case once they are shifted.
-// Same rule and colours as the compositor filter (alpha = 6 x summed channel difference - 0.06, dilated
-// 1px); pixels only one screenshot covers stay clear, since there is nothing to compare them with.
+// Same colours as the compositor filter, dilated 1px.
 const REMOVED = [219, 36, 46], ADDED = [26, 184, 77];
 
-type ChangeMaps = { removed: Float32Array; added: Float32Array; width: number; height: number; stats: Stats };
-
-function changeMaps(before: ImageBitmap, after: ImageBitmap, { beforeX, beforeY, afterX, afterY }: Placement): ChangeMaps {
-  const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height + beforeY, after.height + afterY);
-  const pixels = (bitmap: ImageBitmap) => {
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const context = canvas.getContext("2d")!;
-    context.drawImage(bitmap, 0, 0);
-    return context.getImageData(0, 0, bitmap.width, bitmap.height).data;
-  };
-  const b = pixels(before), a = pixels(after);
-  const removed = new Float32Array(width * height), added = new Float32Array(width * height);
-  const stats: Stats = { changed: 0, compared: 0, regions: [] };
-  for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
-    for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
-      const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
-      let lighterAfter = 0, lighterBefore = 0;
-      for (let c = 0; c < 3; c++) {
-        const d = (a[ai + c] - b[bi + c]) / 255;
-        if (d > 0) lighterAfter += d; else lighterBefore -= d;
-      }
-      const r = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06)), g = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
-      removed[y * width + x] = r;
-      added[y * width + x] = g;
-      stats.compared++;
-      if (r > 0 || g > 0) stats.changed++;
-    }
-  }
-  stats.regions = findRegions(removed, added, width, height);
-  return { removed, added, width, height, stats };
-}
-
-// What a reviewer calls one change (a reworded label, a moved button) is often several blobs of pixels a
-// few apart, so changed pixels are pooled into 8px cells and cells up to 2 apart join one region.
-const CELL = 8, REACH = 2, MAX_REGIONS = 99;
-
-function findRegions(removed: Float32Array, added: Float32Array, width: number, height: number): Region[] {
-  const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
-  const hit = new Uint8Array(cols * rows);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      if (removed[i] > 0 || added[i] > 0) hit[((y / CELL) | 0) * cols + ((x / CELL) | 0)] = 1;
-    }
-  }
-  // Cells only decide what belongs together; the box is drawn round the changed pixels themselves, or its
-  // edges would stick out by however far the change sits from the 8px grid (up to 28px on screen at 4x).
-  const tighten = (bx0: number, by0: number, bx1: number, by1: number) => {
-    let x0 = bx1, y0 = by1, x1 = bx0, y1 = by0;
-    for (let y = by0; y < by1; y++) {
-      for (let x = bx0; x < bx1; x++) {
-        const i = y * width + x;
-        if (removed[i] > 0 || added[i] > 0) { x0 = Math.min(x0, x); x1 = Math.max(x1, x + 1); y0 = Math.min(y0, y); y1 = Math.max(y1, y + 1); }
-      }
-    }
-    return { x0, y0, x1, y1 };
-  };
-  const seen = new Uint8Array(cols * rows);
-  const regions: Region[] = [];
-  // Row-major scan, so each region is found from its top edge and the list comes out top to bottom.
-  for (let start = 0; start < hit.length && regions.length < MAX_REGIONS; start++) {
-    if (!hit[start] || seen[start]) continue;
-    let left = cols, right = 0, top = rows, bottom = 0;
-    const stack = [start];
-    seen[start] = 1;
-    while (stack.length) {
-      const cell = stack.pop()!, col = cell % cols, row = (cell / cols) | 0;
-      left = Math.min(left, col); right = Math.max(right, col); top = Math.min(top, row); bottom = Math.max(bottom, row);
-      for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) {
-        for (let c = Math.max(0, col - REACH); c <= Math.min(cols - 1, col + REACH); c++) {
-          const next = r * cols + c;
-          if (hit[next] && !seen[next]) { seen[next] = 1; stack.push(next); }
-        }
-      }
-    }
-    const box = tighten(left * CELL, top * CELL, Math.min(width, (right + 1) * CELL), Math.min(height, (bottom + 1) * CELL));
-    regions.push({ x: box.x0 / width, y: box.y0 / height, w: (box.x1 - box.x0) / width, h: (box.y1 - box.y0) / height });
-  }
-  return regions;
+function pixels(bitmap: ImageBitmap): Pixels {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = canvas.getContext("2d")!;
+  context.drawImage(bitmap, 0, 0);
+  return { data: context.getImageData(0, 0, bitmap.width, bitmap.height).data, width: bitmap.width, height: bitmap.height };
 }
 
 async function diffImage({ removed, added, width, height }: ChangeMaps) {

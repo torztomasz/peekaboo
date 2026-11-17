@@ -25,6 +25,8 @@ at two thumbnails side by side.
   by the left edge, centre or right edge yourself.
 - **How much changed**: with Auto on, each pair says what share of its pixels changed, and warns when Before
   and After are the same picture (the same screenshot uploaded twice looks like a clean Diff otherwise).
+- **Moved, not changed**: with Auto on, a banner or a new menu item that pushes the rest down lights up on
+  its own in Diff; what it pushed down is compared with where it came from, not marked as changed.
 - **Full screen**: one pair at a time, ← → through every pair in the PR, 1–2 to switch modes, Esc to close.
   With Auto on, ↑ ↓ zoom to each place that changed, outlined, and back out after the last one.
 
@@ -78,6 +80,11 @@ GitHub serves uploaded images without CORS headers, so a canvas can't read their
 compositor can still blend them: in an isolated group, `lighten` then `difference` leaves
 `max(0, other − this)` per channel, which an SVG `feColorMatrix` turns into a red or green overlay whose
 opacity grows with the difference, dilated 1px so hairline changes stay visible.
+
+With Auto on, the extension's worker can read the pixels, so it also lines up what moved. In each band of
+columns that changed, rows of pixels are matched like lines in a text diff: rows only After has were
+added, and the rest are compared with the rows they moved from. The worker's diff then replaces the
+compositor's.
 
 ## Privacy
 

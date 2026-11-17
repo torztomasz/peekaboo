@@ -37,6 +37,290 @@
     return best;
   }
 
+  // src/changes.ts
+  var AS_IS = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
+  function lineUpChanges(before, after) {
+    const asPlaced = changeMaps(before, after, AS_IS);
+    if (before.width !== after.width || asPlaced.stats.changed === 0) return asPlaced;
+    const { width, height } = asPlaced;
+    const removed = new Float32Array(width * height), added = new Float32Array(width * height);
+    let changed = 0, moved = false;
+    for (const [x0, x1] of columnBands(asPlaced)) {
+      const placedCount = countBand(asPlaced, x0, x1);
+      const lined = lineUpBand(before, after, x0, x1);
+      const better = lined && lined.changed < placedCount ? lined : null;
+      const source = better ?? asPlaced;
+      for (let y = 0; y < height; y++) {
+        for (let x = x0; x < x1; x++) {
+          const i = y * width + x;
+          removed[i] = source.removed[i];
+          added[i] = source.added[i];
+        }
+      }
+      changed += better ? better.changed : placedCount;
+      moved ||= Boolean(better);
+    }
+    if (!moved) return asPlaced;
+    const stats = { changed, compared: asPlaced.stats.compared, moved, regions: visibleRegions(removed, added, width, height) };
+    return { removed, added, width, height, stats };
+  }
+  var strength = (difference) => Math.min(1, Math.max(0, 6 * difference - 0.06));
+  function changeMaps(before, after, { beforeX, beforeY, afterX, afterY }) {
+    const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height + beforeY, after.height + afterY);
+    const b = before.data, a = after.data;
+    const removed = new Float32Array(width * height), added = new Float32Array(width * height);
+    const stats = { changed: 0, compared: 0, moved: false, regions: [] };
+    for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
+      for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
+        const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
+        const [r, g] = comparePixel(b, bi, a, ai);
+        removed[y * width + x] = r;
+        added[y * width + x] = g;
+        stats.compared++;
+        if (r > 0 || g > 0) stats.changed++;
+      }
+    }
+    stats.regions = visibleRegions(removed, added, width, height);
+    return { removed, added, width, height, stats };
+  }
+  var differs = (b, bi, a, ai) => {
+    const [r, g] = comparePixel(b, bi, a, ai);
+    return r > 0 || g > 0;
+  };
+  function comparePixel(b, bi, a, ai) {
+    let lighterAfter = 0, lighterBefore = 0;
+    for (let c = 0; c < 3; c++) {
+      const d = (a[ai + c] - b[bi + c]) / 255;
+      if (d > 0) lighterAfter += d;
+      else lighterBefore -= d;
+    }
+    return [strength(lighterAfter), strength(lighterBefore)];
+  }
+  function columnBands({ removed, added, width, height }) {
+    const boxes = findRegions(removed, added, width, height);
+    if (boxes.length >= MAX_REGIONS) return [[0, width]];
+    const spans = boxes.map(({ x0, x1 }) => [x0, x1]).sort((p, q) => p[0] - q[0]);
+    const bands = [];
+    for (const [x0, x1] of spans) {
+      const last = bands[bands.length - 1];
+      if (last && x0 <= last[1]) last[1] = Math.max(last[1], x1);
+      else bands.push([x0, x1]);
+    }
+    return bands;
+  }
+  function countBand({ removed, added, width, height }, x0, x1) {
+    let count = 0;
+    for (let y = 0; y < height; y++) for (let x = x0; x < x1; x++) if (removed[y * width + x] > 0 || added[y * width + x] > 0) count++;
+    return count;
+  }
+  var MAX_ROW_EDITS = 1200;
+  var EDGE_MARGIN = 24;
+  var EDGE_SHARE = 0.05;
+  function lineUpBand(before, after, x0, x1) {
+    const pairs = matchRows(before.height, after.height, rowsMatch(before, after, x0, x1));
+    if (!pairs) return null;
+    const width = Math.max(before.width, after.width), height = Math.max(before.height, after.height);
+    const removed = new Float32Array(width * height), added = new Float32Array(width * height);
+    let changed = 0;
+    const mark = (x, y, other, oi) => {
+      const ai2 = (y * after.width + x) * 4;
+      const [r, g] = comparePixel(other, oi, after.data, ai2);
+      if ((r > 0 || g > 0) && y < before.height && !differs(before.data, (y * before.width + x) * 4, after.data, ai2)) return;
+      paint(y * width + x, r, g);
+    };
+    const paint = (i, r, g) => {
+      if (r <= 0 && g <= 0) return;
+      if (removed[i] === 0 && added[i] === 0) changed++;
+      removed[i] = Math.max(removed[i], r);
+      added[i] = Math.max(added[i], g);
+    };
+    const edit = (b0, b1, a0, a1) => {
+      const common = Math.min(b1 - b0, a1 - a0);
+      for (let k = 0; k < common; k++) for (let x = x0; x < x1; x++) mark(x, a0 + k, before.data, ((b0 + k) * before.width + x) * 4);
+      if (b1 === before.height && a1 === after.height && before.height === after.height) return;
+      const grownFrom = a0 > 0 ? a0 - 1 : a1 < after.height ? a1 : -1;
+      const background = grownFrom < 0 && a1 > a0 + common ? commonColour(before, x0, x1) : null;
+      for (let y = a0 + common; y < a1; y++) {
+        for (let x = x0; x < x1; x++) {
+          if (background) mark(x, y, background, 0);
+          else mark(x, y, after.data, (grownFrom * after.width + x) * 4);
+        }
+      }
+      if (b1 - b0 > common) markDeletion(before, after, b0 + common, b1, x0, x1, a1, width, (i) => paint(i, 1, 0));
+    };
+    let bi = 0, ai = 0;
+    for (const [b, a] of [...pairs, [before.height, after.height]]) {
+      if (b > bi || a > ai) edit(bi, b, ai, a);
+      bi = b + 1;
+      ai = a + 1;
+    }
+    return { removed, added, changed };
+  }
+  function markDeletion(before, after, b0, b1, x0, x1, at, width, paint) {
+    const below = Math.min(at, after.height - 1), above = Math.max(0, at - 1), top = Math.min(above, after.height - 2);
+    for (let x = x0; x < x1; x++) {
+      let content = false;
+      for (let y = b0; y < b1 && !content; y++) {
+        const bi = (y * before.width + x) * 4;
+        content = differs(after.data, (below * after.width + x) * 4, before.data, bi) && differs(after.data, (above * after.width + x) * 4, before.data, bi);
+      }
+      if (content) for (let y = top; y < top + 2; y++) paint(y * width + x);
+    }
+  }
+  function rowsMatch(before, after, x0, x1) {
+    const margin = Math.min(EDGE_MARGIN, Math.floor((x1 - x0) * EDGE_SHARE));
+    const hb = rowHashes(before, x0 + margin, x1 - margin), ha = rowHashes(after, x0 + margin, x1 - margin);
+    return (b, a) => hb[b] === ha[a];
+  }
+  function rowHashes({ data, width, height }, x0, x1) {
+    const hashes = new Int32Array(height);
+    for (let y = 0; y < height; y++) {
+      let h = 2166136261;
+      for (let i = (y * width + x0) * 4, end = (y * width + x1) * 4; i < end; i += 4) {
+        h = Math.imul(h ^ data[i], 16777619);
+        h = Math.imul(h ^ data[i + 1], 16777619);
+        h = Math.imul(h ^ data[i + 2], 16777619);
+      }
+      hashes[y] = h;
+    }
+    return hashes;
+  }
+  function commonColour({ data, width, height }, x0, x1) {
+    const counts = /* @__PURE__ */ new Map();
+    const step = Math.max(1, Math.floor(Math.sqrt((x1 - x0) * height / 2e4)));
+    let best = 0, bestCount = 0;
+    for (let y = 0; y < height; y += step) {
+      for (let x = x0; x < x1; x += step) {
+        const i = (y * width + x) * 4, key = data[i] << 16 | data[i + 1] << 8 | data[i + 2];
+        const count = (counts.get(key) ?? 0) + 1;
+        counts.set(key, count);
+        if (count > bestCount) {
+          bestCount = count;
+          best = key;
+        }
+      }
+    }
+    return new Uint8ClampedArray([best >> 16, best >> 8 & 255, best & 255, 255]);
+  }
+  function matchRows(n, m, same, maxEdits = MAX_ROW_EDITS) {
+    let tail = 0;
+    while (tail < n && tail < m && same(n - 1 - tail, m - 1 - tail)) tail++;
+    const pairs = myers(n - tail, m - tail, same, maxEdits);
+    if (!pairs) return null;
+    for (let i = tail; i > 0; i--) pairs.push([n - i, m - i]);
+    return pairs;
+  }
+  function myers(n, m, same, maxEdits) {
+    if (n === 0 || m === 0) return [];
+    const offset = maxEdits + 1;
+    let v = new Int32Array(2 * offset + 1);
+    const trace = [];
+    for (let d = 0; d <= maxEdits; d++) {
+      trace.push(v.slice(offset - d - 1, offset + d + 2));
+      const next = v.slice();
+      for (let k = -d; k <= d; k += 2) {
+        let x = k === -d || k !== d && v[offset + k - 1] < v[offset + k + 1] ? v[offset + k + 1] : v[offset + k - 1] + 1;
+        let y = x - k;
+        while (x < n && y < m && same(x, y)) {
+          x++;
+          y++;
+        }
+        next[offset + k] = x;
+        if (x >= n && y >= m) return walkBack(trace, d, k, x);
+      }
+      v = next;
+    }
+    return null;
+  }
+  function walkBack(trace, d, k, x) {
+    const pairs = [];
+    let y = x - k;
+    for (; d > 0; d--) {
+      const v = trace[d], at = (kk) => v[kk + d + 1];
+      const down = k === -d || k !== d && at(k - 1) < at(k + 1);
+      const prevK = down ? k + 1 : k - 1, prevX = at(prevK), prevY = prevX - prevK;
+      const startX = down ? prevX : prevX + 1;
+      while (x > startX) {
+        x--;
+        y--;
+        pairs.push([x, y]);
+      }
+      x = prevX;
+      y = prevY;
+      k = prevK;
+    }
+    while (x > 0 && y > 0) {
+      x--;
+      y--;
+      pairs.push([x, y]);
+    }
+    return pairs.reverse();
+  }
+  var CELL = 8;
+  var REACH = 2;
+  var MAX_REGIONS = 99;
+  var FAINT = 0.25;
+  function visibleRegions(removed, added, width, height) {
+    const peak = ({ x0, y0, x1, y1 }) => {
+      let max = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) max = Math.max(max, removed[y * width + x], added[y * width + x]);
+      return max;
+    };
+    return findRegions(removed, added, width, height).filter((box) => peak(box) >= FAINT).map((box) => toRegion(box, width, height));
+  }
+  var toRegion = ({ x0, y0, x1, y1 }, width, height) => ({ x: x0 / width, y: y0 / height, w: (x1 - x0) / width, h: (y1 - y0) / height });
+  function findRegions(removed, added, width, height) {
+    const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
+    const hit = new Uint8Array(cols * rows);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (removed[i] > 0 || added[i] > 0) hit[(y / CELL | 0) * cols + (x / CELL | 0)] = 1;
+      }
+    }
+    const tighten = (bx0, by0, bx1, by1) => {
+      let x0 = bx1, y0 = by1, x1 = bx0, y1 = by0;
+      for (let y = by0; y < by1; y++) {
+        for (let x = bx0; x < bx1; x++) {
+          const i = y * width + x;
+          if (removed[i] > 0 || added[i] > 0) {
+            x0 = Math.min(x0, x);
+            x1 = Math.max(x1, x + 1);
+            y0 = Math.min(y0, y);
+            y1 = Math.max(y1, y + 1);
+          }
+        }
+      }
+      return { x0, y0, x1, y1 };
+    };
+    const seen = new Uint8Array(cols * rows);
+    const boxes = [];
+    for (let start = 0; start < hit.length && boxes.length < MAX_REGIONS; start++) {
+      if (!hit[start] || seen[start]) continue;
+      let left = cols, right = 0, top = rows, bottom = 0;
+      const stack = [start];
+      seen[start] = 1;
+      while (stack.length) {
+        const cell = stack.pop(), col = cell % cols, row = cell / cols | 0;
+        left = Math.min(left, col);
+        right = Math.max(right, col);
+        top = Math.min(top, row);
+        bottom = Math.max(bottom, row);
+        for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) {
+          for (let c = Math.max(0, col - REACH); c <= Math.min(cols - 1, col + REACH); c++) {
+            const next = r * cols + c;
+            if (hit[next] && !seen[next]) {
+              seen[next] = 1;
+              stack.push(next);
+            }
+          }
+        }
+      }
+      boxes.push(tighten(left * CELL, top * CELL, Math.min(width, (right + 1) * CELL), Math.min(height, (bottom + 1) * CELL)));
+    }
+    return boxes;
+  }
+
   // src/background.ts
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     if (message?.type === "align" || message?.type === "compare") {
@@ -73,20 +357,24 @@
         exact = true;
       }
     }
+    if (!placement && b.width === a.width) {
+      const changes2 = lineUpChanges(pixels(b), pixels(a));
+      return { placement: AS_IS, diff: await diffImage(changes2), stats: changes2.stats };
+    }
     if (!placement) {
       const beforeIsWide = b.width >= a.width;
       const dx = slideSideways(beforeIsWide ? b : a, beforeIsWide ? a : b);
       placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
     }
-    const changes = changeMaps(b, a, placement);
+    const changes = changeMaps(pixels(b), pixels(a), placement);
     return { placement, diff: await diffImage(changes), stats: exact ? changes.stats : null };
   }
-  var AS_IS = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
   async function compare({ before, after }) {
     if (!await chrome.permissions.contains({ origins: IMAGE_ORIGINS })) return { needsPermission: true };
     const [b, a] = await Promise.all([load(before), load(after)]);
     if (b.width !== a.width || b.height !== a.height) return { error: "sizes differ" };
-    return { stats: changeMaps(b, a, AS_IS).stats };
+    const changes = lineUpChanges(pixels(b), pixels(a));
+    return { stats: changes.stats, diff: changes.stats.moved ? await diffImage(changes) : null };
   }
   function slideSideways(wide, narrow) {
     const slack = wide.width - narrow.width;
@@ -136,90 +424,11 @@
   }
   var REMOVED = [219, 36, 46];
   var ADDED = [26, 184, 77];
-  function changeMaps(before, after, { beforeX, beforeY, afterX, afterY }) {
-    const width = Math.max(before.width + beforeX, after.width + afterX), height = Math.max(before.height + beforeY, after.height + afterY);
-    const pixels = (bitmap) => {
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const context = canvas.getContext("2d");
-      context.drawImage(bitmap, 0, 0);
-      return context.getImageData(0, 0, bitmap.width, bitmap.height).data;
-    };
-    const b = pixels(before), a = pixels(after);
-    const removed = new Float32Array(width * height), added = new Float32Array(width * height);
-    const stats = { changed: 0, compared: 0, regions: [] };
-    for (let y = Math.max(beforeY, afterY); y < Math.min(before.height + beforeY, after.height + afterY); y++) {
-      for (let x = Math.max(beforeX, afterX); x < Math.min(before.width + beforeX, after.width + afterX); x++) {
-        const bi = ((y - beforeY) * before.width + x - beforeX) * 4, ai = ((y - afterY) * after.width + x - afterX) * 4;
-        let lighterAfter = 0, lighterBefore = 0;
-        for (let c = 0; c < 3; c++) {
-          const d = (a[ai + c] - b[bi + c]) / 255;
-          if (d > 0) lighterAfter += d;
-          else lighterBefore -= d;
-        }
-        const r = Math.min(1, Math.max(0, 6 * lighterAfter - 0.06)), g = Math.min(1, Math.max(0, 6 * lighterBefore - 0.06));
-        removed[y * width + x] = r;
-        added[y * width + x] = g;
-        stats.compared++;
-        if (r > 0 || g > 0) stats.changed++;
-      }
-    }
-    stats.regions = findRegions(removed, added, width, height);
-    return { removed, added, width, height, stats };
-  }
-  var CELL = 8;
-  var REACH = 2;
-  var MAX_REGIONS = 99;
-  function findRegions(removed, added, width, height) {
-    const cols = Math.ceil(width / CELL), rows = Math.ceil(height / CELL);
-    const hit = new Uint8Array(cols * rows);
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const i = y * width + x;
-        if (removed[i] > 0 || added[i] > 0) hit[(y / CELL | 0) * cols + (x / CELL | 0)] = 1;
-      }
-    }
-    const tighten = (bx0, by0, bx1, by1) => {
-      let x0 = bx1, y0 = by1, x1 = bx0, y1 = by0;
-      for (let y = by0; y < by1; y++) {
-        for (let x = bx0; x < bx1; x++) {
-          const i = y * width + x;
-          if (removed[i] > 0 || added[i] > 0) {
-            x0 = Math.min(x0, x);
-            x1 = Math.max(x1, x + 1);
-            y0 = Math.min(y0, y);
-            y1 = Math.max(y1, y + 1);
-          }
-        }
-      }
-      return { x0, y0, x1, y1 };
-    };
-    const seen = new Uint8Array(cols * rows);
-    const regions = [];
-    for (let start = 0; start < hit.length && regions.length < MAX_REGIONS; start++) {
-      if (!hit[start] || seen[start]) continue;
-      let left = cols, right = 0, top = rows, bottom = 0;
-      const stack = [start];
-      seen[start] = 1;
-      while (stack.length) {
-        const cell = stack.pop(), col = cell % cols, row = cell / cols | 0;
-        left = Math.min(left, col);
-        right = Math.max(right, col);
-        top = Math.min(top, row);
-        bottom = Math.max(bottom, row);
-        for (let r = Math.max(0, row - REACH); r <= Math.min(rows - 1, row + REACH); r++) {
-          for (let c = Math.max(0, col - REACH); c <= Math.min(cols - 1, col + REACH); c++) {
-            const next = r * cols + c;
-            if (hit[next] && !seen[next]) {
-              seen[next] = 1;
-              stack.push(next);
-            }
-          }
-        }
-      }
-      const box = tighten(left * CELL, top * CELL, Math.min(width, (right + 1) * CELL), Math.min(height, (bottom + 1) * CELL));
-      regions.push({ x: box.x0 / width, y: box.y0 / height, w: (box.x1 - box.x0) / width, h: (box.y1 - box.y0) / height });
-    }
-    return regions;
+  function pixels(bitmap) {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext("2d");
+    context.drawImage(bitmap, 0, 0);
+    return { data: context.getImageData(0, 0, bitmap.width, bitmap.height).data, width: bitmap.width, height: bitmap.height };
   }
   async function diffImage({ removed, added, width, height }) {
     const out = new ImageData(width, height);

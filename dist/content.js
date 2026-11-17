@@ -297,6 +297,10 @@
   var MAX_STEPS = 15;
   function fitPair(root, frame, pair, showStats2) {
     let done = false;
+    const showLinedUp = (response) => {
+      if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
+      showStats2(response?.stats ?? null);
+    };
     const apply = () => {
       const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
       if (done || !bw || !aw) return;
@@ -308,16 +312,18 @@
       if (sameSize || density) {
         frame.style.setProperty("--natural-width", `${aw}px`);
         frame.style.setProperty("--aspect", String(aw / ah));
-        if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, (response) => showStats2(response?.stats ?? null));
+        if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, showLinedUp);
         return;
       }
       if (bw === aw) {
         frame.style.setProperty("--natural-width", `${aw}px`);
         frame.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
-        if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
+        if (!canAutoAlign(pair)) return;
         askBackground("align", pair, (response) => {
           const p = response?.placement;
-          if (!p || !p.beforeY && !p.afterY) return;
+          if (!p) return;
+          if (!p.beforeY && !p.afterY) return showLinedUp(response);
+          if (loadAlign() !== "auto") return;
           root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats2, { placement: p, diff: response.diff, stats: response.stats }), frame.nextSibling);
         });
         return;
@@ -346,8 +352,9 @@
     const share = stats.changed / stats.compared * 100;
     const percent = share < 0.1 ? "<0.1" : share < 10 ? share.toFixed(1) : Math.round(share).toString();
     const scattered = stats.regions.length > MAX_STEPS ? `, in ${stats.regions.length >= 99 ? "99+" : stats.regions.length} places: too scattered to step through` : "";
-    node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed${scattered}`;
-    node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`;
+    const moved = stats.moved ? "; the rest only moved" : "";
+    node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed${moved}${scattered}`;
+    node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly` + (stats.moved ? ", once what moved is compared with where it came from" : "");
   }
   function naturalSize(media) {
     return media instanceof HTMLImageElement ? [media.naturalWidth, media.naturalHeight] : [media.videoWidth, media.videoHeight];

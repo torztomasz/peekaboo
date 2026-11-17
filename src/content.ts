@@ -389,8 +389,9 @@ function eachAlignBar(action: (bar: AlignBar) => void) {
 }
 
 type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: number };
-// `regions` are the separate places that changed, as fractions of the frame, top to bottom.
-type Stats = { changed: number; compared: number; regions: Region[] };
+// `moved` says rows were lined up after content moved. `regions` are the separate places that changed, as
+// fractions of the frame, top to bottom.
+type Stats = { changed: number; compared: number; moved: boolean; regions: Region[] };
 type Region = { x: number; y: number; w: number; h: number };
 // Past 4x a screenshot's pixels turn to blocks; 2% of the frame each side keeps the region's surroundings in view.
 const MAX_ZOOM = 4, ZOOM_MARGIN = 0.02;
@@ -401,6 +402,11 @@ type ShowStats = (stats: Stats | null) => void;
 
 function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: ShowStats) {
   let done = false;
+  // When rows had to be lined up, the compositor diff would colour everything that moved; the worker's doesn't.
+  const showLinedUp = (response: { stats?: Stats; diff?: string | null } | null) => {
+    if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
+    showStats(response?.stats ?? null);
+  };
   const apply = () => {
     const [bw, bh] = naturalSize(pair.before), [aw, ah] = naturalSize(pair.after);
     if (done || !bw || !aw) return;
@@ -412,7 +418,7 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: S
     if (sameSize || density) {
       frame.style.setProperty("--natural-width", `${aw}px`);
       frame.style.setProperty("--aspect", String(aw / ah));
-      if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, (response) => showStats(response?.stats ?? null));
+      if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, showLinedUp);
       return;
     }
     // Same width, different heights: usually a page that got longer or shorter, so top-aligned is right
@@ -420,10 +426,12 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: S
     if (bw === aw) {
       frame.style.setProperty("--natural-width", `${aw}px`);
       frame.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
-      if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
+      if (!canAutoAlign(pair)) return;
       askBackground("align", pair, (response) => {
         const p = response?.placement as Placement | undefined;
-        if (!p || (!p.beforeY && !p.afterY)) return;
+        if (!p) return;
+        if (!p.beforeY && !p.afterY) return showLinedUp(response);
+        if (loadAlign() !== "auto") return;
         root.insertBefore(buildAlignBar(frame, pair, [bw, bh], [aw, ah], showStats, { placement: p, diff: response.diff, stats: response.stats }), frame.nextSibling);
       });
       return;
@@ -457,8 +465,10 @@ function showStats(node: HTMLElement, stats: Stats | null) {
   const share = (stats.changed / stats.compared) * 100;
   const percent = share < 0.1 ? "<0.1" : share < 10 ? share.toFixed(1) : Math.round(share).toString();
   const scattered = stats.regions.length > MAX_STEPS ? `, in ${stats.regions.length >= 99 ? "99+" : stats.regions.length} places: too scattered to step through` : "";
-  node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed${scattered}`;
-  node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`;
+  const moved = stats.moved ? "; the rest only moved" : "";
+  node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed${moved}${scattered}`;
+  node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`
+    + (stats.moved ? ", once what moved is compared with where it came from" : "");
 }
 
 function naturalSize(media: HTMLImageElement | HTMLVideoElement) {
