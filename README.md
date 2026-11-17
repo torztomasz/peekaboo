@@ -122,16 +122,30 @@ Done when: on a PR with a | Before | After | table, every mode works, the origin
 npm install
 npm run build     # or: npm run watch
 npm run package   # → release/peekaboo-<version>.zip
-npm test          # Auto-align's pixel work, in Node
-npm run test:browser   # the content script on a GitHub-like page, in headless Chromium
-npm run bench     # how long Auto-align takes, and what the script costs an idle GitHub tab
+npm run check     # the gate: everything below except the canary, mutation run and benchmarks
 ```
 
-The browser tests and benchmarks need Playwright's Chromium once: `npx playwright-core install chromium-headless-shell`.
+`npm run check` is what CI runs on every push and pull request. Its parts:
+
+| Command | What it holds in place |
+| --- | --- |
+| `npm run typecheck` | The TypeScript compiles (esbuild alone doesn't check types). |
+| `npm test` | Auto-align's pixel work, in Node; and what ships: permissions, version, the committed `dist/`, the zip. |
+| `npm run test:browser` | The page in headless Chromium: tables, modes, Flip, Diff's colours on screen, sizes, full screen, Auto-align with the worker, the settings page; and the release zip loaded into Chromium as an extension. |
+| `npm run test:speed` | Time budgets for the worker on screenshots of the sizes pull requests carry. |
+
+Outside the gate:
+
+- `npm run canary` runs the content script on a real pull request from github.com, to notice when GitHub
+  changes its markup. CI runs it daily.
+- `npm run mutate` breaks the source one small change at a time and reports the changes no test noticed.
+- `npm run bench` prints how long Auto-align takes, and what the script costs an idle GitHub tab.
+
+The browser tests need Playwright's Chromium once: `npx playwright-core install chromium chromium-headless-shell`.
 
 Reload the extension on `chrome://extensions` and refresh the GitHub tab after a build. Bump `version` in
-both `manifest.json` and `package.json` and add a `CHANGELOG.md` entry before packaging. `store/` holds listing text and images kept for a
-possible Chrome Web Store submission later.
+`manifest.json`, `package.json` and `src/peekaboo.user.ts` (a test checks they agree) and add a `CHANGELOG.md`
+entry before packaging. `store/` holds listing text and images kept for a possible Chrome Web Store submission later.
 
 ## License
 
