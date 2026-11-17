@@ -11,7 +11,7 @@ type Placement = { beforeX: number; beforeY: number; afterX: number; afterY: num
 // `regions` are the separate places that changed, as fractions of the shared canvas, top to bottom.
 type Stats = { changed: number; compared: number; regions: Region[] };
 type Region = { x: number; y: number; w: number; h: number };
-type AlignResponse = { placement: Placement; diff: string; stats: Stats } | { needsPermission: true } | { error: string };
+type AlignResponse = { placement: Placement; diff: string; stats: Stats | null } | { needsPermission: true } | { error: string };
 type CompareResponse = { stats: Stats } | { needsPermission: true } | { error: string };
 
 chrome.runtime.onMessage.addListener((message, _sender, reply) => {
@@ -49,11 +49,15 @@ async function findOffset({ before, after }: PairRequest): Promise<AlignResponse
   const [b, a] = await Promise.all([load(before), load(after)]);
   const fits = (outer: ImageBitmap, inner: ImageBitmap) => outer.width >= inner.width && outer.height >= inner.height;
   let placement: Placement | null = null;
+  // Only a crop lines up pixel for pixel. Two window widths of a page reflow (columns move, rows end at
+  // another edge), so sliding one sideways leaves layout differences a count would report as changes.
+  let exact = false;
   if (fits(b, a) || fits(a, b)) {
     const beforeOutside = fits(b, a);
     const found = locate(beforeOutside ? b : a, beforeOutside ? a : b, gray);
     if (found.error <= CONTAINED_MAX_ERROR) {
       placement = beforeOutside ? { beforeX: 0, beforeY: 0, afterX: found.x, afterY: found.y } : { beforeX: found.x, beforeY: found.y, afterX: 0, afterY: 0 };
+      exact = true;
     }
   }
   if (!placement) {
@@ -62,7 +66,7 @@ async function findOffset({ before, after }: PairRequest): Promise<AlignResponse
     placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
   }
   const changes = changeMaps(b, a, placement);
-  return { placement, diff: await diffImage(changes), stats: changes.stats };
+  return { placement, diff: await diffImage(changes), stats: exact ? changes.stats : null };
 }
 
 // Same-size pairs line up as they are, so the page only needs to know how much changed. It's the cheap

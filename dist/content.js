@@ -129,7 +129,7 @@
     let regions = [];
     fitPair(root, frame, pair, (counts) => {
       showStats(stats, counts);
-      regions = counts?.regions ?? [];
+      regions = counts && counts.regions.length <= MAX_STEPS ? counts.regions : [];
       zoomTo(null);
       root.dispatchEvent(new Event("peekaboo:regions", { bubbles: true }));
     });
@@ -261,6 +261,7 @@
   }
   var MAX_ZOOM = 4;
   var ZOOM_MARGIN = 0.02;
+  var MAX_STEPS = 15;
   function fitPair(root, frame, pair, showStats2) {
     let done = false;
     const apply = () => {
@@ -311,7 +312,8 @@
     node.dataset.kind = same ? "same" : "changed";
     const share = stats.changed / stats.compared * 100;
     const percent = share < 0.1 ? "<0.1" : share < 10 ? share.toFixed(1) : Math.round(share).toString();
-    node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed`;
+    const scattered = stats.regions.length > MAX_STEPS ? `, in ${stats.regions.length >= 99 ? "99+" : stats.regions.length} places: too scattered to step through` : "";
+    node.textContent = same ? "No visible difference. The same screenshot twice?" : `${percent}% of pixels changed${scattered}`;
     node.title = `${stats.changed.toLocaleString()} of ${stats.compared.toLocaleString()} compared pixels differ visibly`;
   }
   function naturalSize(media) {

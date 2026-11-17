@@ -64,11 +64,13 @@
     const [b, a] = await Promise.all([load(before), load(after)]);
     const fits = (outer, inner) => outer.width >= inner.width && outer.height >= inner.height;
     let placement = null;
+    let exact = false;
     if (fits(b, a) || fits(a, b)) {
       const beforeOutside = fits(b, a);
       const found = locate(beforeOutside ? b : a, beforeOutside ? a : b, gray);
       if (found.error <= CONTAINED_MAX_ERROR) {
         placement = beforeOutside ? { beforeX: 0, beforeY: 0, afterX: found.x, afterY: found.y } : { beforeX: found.x, beforeY: found.y, afterX: 0, afterY: 0 };
+        exact = true;
       }
     }
     if (!placement) {
@@ -77,7 +79,7 @@
       placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
     }
     const changes = changeMaps(b, a, placement);
-    return { placement, diff: await diffImage(changes), stats: changes.stats };
+    return { placement, diff: await diffImage(changes), stats: exact ? changes.stats : null };
   }
   var AS_IS = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
   async function compare({ before, after }) {
