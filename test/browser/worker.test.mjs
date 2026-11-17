@@ -1,35 +1,16 @@
 // The background worker's bundle in headless Chromium (npm run test:browser), where canvas decoding and
-// encoding are real. Methodology: a stub `chrome` captures the message listener and lets a test grant or
-// revoke the image permission; `fetch` serves the bench's synthetic screenshots for GitHub-style URLs and
-// is counted, to see whether an answer was worked out again.
+// encoding are real. Methodology: a stub `chrome` (openWorker in harness.mjs) captures the worker's
+// listeners, records the tabs it opens, and lets a test grant or revoke the image permission; `fetch`
+// serves the bench's synthetic screenshots for GitHub-style URLs and is counted, to see whether an answer
+// was worked out again.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
-import { bundle, launch } from "../../bench/browser.mjs";
+import { launch, openWorker } from "./harness.mjs";
 
 let browser, page;
 before(async () => {
   browser = await launch();
-  page = await browser.newPage();
-  await page.addScriptTag({ content: readFileSync(new URL("../../bench/screens.js", import.meta.url), "utf8") });
-  await page.addScriptTag({
-    content: `
-      window.granted = true;
-      window.fetched = 0;
-      window.served = {};
-      const fetchImage = window.fetch;
-      window.fetch = (url) => { window.fetched++; return fetchImage(window.served[url] ?? url); };
-      // Serves a canvas at a URL the page's images would have, as GitHub does.
-      window.serve = async (url, canvas) => { window.served[url] = await screens.url(canvas); return url; };
-      window.chrome = {
-        runtime: { id: "test", onMessage: { addListener: (f) => (window.listener = f) }, onInstalled: { addListener() {} }, getURL: (p) => p },
-        action: { onClicked: { addListener() {} } },
-        permissions: { contains: async () => window.granted },
-        tabs: {},
-      };
-      window.ask = (message) => new Promise((resolve) => window.listener(message, {}, resolve));`,
-  });
-  await page.addScriptTag({ content: await bundle(new URL("../../src/background.ts", import.meta.url).pathname) });
+  page = await openWorker(browser);
 });
 after(() => browser?.close());
 
@@ -74,4 +55,36 @@ test("asks again about images that can change behind their URL", async () => {
     return { first: first.same, second: second.same, fetched: window.fetched };
   });
   assert.deepEqual(replies, { first: false, second: true, fetched: 2 });
+});
+
+// A reply must always come: the page waits on it to stop saying "Lining up…".
+test("replies with an error when a screenshot can't be read, and still answers the next pair", async () => {
+  const replies = await page.evaluate(async () => {
+    const good = await screens.url(screens.page(640, 400));
+    const failed = await ask({ type: "align", before: good, after: "blob:missing" });
+    const next = await ask({ type: "compare", before: good, after: good });
+    return { failed, next };
+  });
+  assert.equal(typeof replies.failed.error, "string");
+  assert.deepEqual(replies.next, { same: true, dark: false });
+});
+
+test("opens the welcome page on install only, and settings from the toolbar icon", async () => {
+  const opened = await page.evaluate(() => {
+    window.installed({ reason: "update" });
+    window.installed({ reason: "install" });
+    window.iconClicked();
+    return window.opened;
+  });
+  assert.deepEqual(opened, { tabs: [{ url: "options.html?welcome" }], settings: 1 });
+});
+
+// Asked from a pull request, settings open beside that tab and know which tab to go back to.
+test("opens settings next to the pull request that asked for them", async () => {
+  const opened = await page.evaluate(() => {
+    window.opened.tabs = [];
+    window.listener({ type: "open-options" }, { tab: { id: 41, index: 5 } }, () => {});
+    return window.opened.tabs;
+  });
+  assert.deepEqual(opened, [{ url: "options.html?from=41", index: 6, openerTabId: 41 }]);
 });
