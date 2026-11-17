@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Peekaboo: Before/After for GitHub PRs",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Flip or pixel-diff the Before/After screenshots in GitHub pull requests and issues, with a full-screen review mode.",
   "content_scripts": [
     {

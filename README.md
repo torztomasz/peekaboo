@@ -58,7 +58,7 @@ npx skills add torztomasz/skills --skill pr-screenshots -g
 
 ## Install
 
-Peekaboo isn't on the Chrome Web Store; install it from a [release](../../releases) zip:
+Peekaboo isn't on the Chrome Web Store; install it from a [release](../../releases) zip (what's new: [CHANGELOG](CHANGELOG.md)):
 
 1. Download and unzip `peekaboo-<version>.zip`; keep the folder somewhere permanent.
 2. Open `chrome://extensions`, turn on **Developer mode** (top right).
@@ -130,7 +130,7 @@ npm run bench     # how long Auto-align takes, and what the script costs an idle
 The browser tests and benchmarks need Playwright's Chromium once: `npx playwright-core install chromium-headless-shell`.
 
 Reload the extension on `chrome://extensions` and refresh the GitHub tab after a build. Bump `version` in
-both `manifest.json` and `package.json` before packaging. `store/` holds listing text and images kept for a
+both `manifest.json` and `package.json` and add a `CHANGELOG.md` entry before packaging. `store/` holds listing text and images kept for a
 possible Chrome Web Store submission later.
 
 ## License
