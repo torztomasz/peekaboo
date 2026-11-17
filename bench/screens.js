@@ -36,6 +36,9 @@ window.screens = (() => {
         y += 22;
       }
     }
+    // Pinned to the window's right edge, so two window widths of a page differ beyond a crop.
+    g.fillStyle = "#eaeef2";
+    g.fillRect(width - 280, 64, 260, height - 64);
     if (change) {
       g.fillStyle = "#1a7f37";
       g.fillRect(columnX + 400, 300, 180, 36);
