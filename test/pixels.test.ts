@@ -1,11 +1,11 @@
-// Auto-align and "how much changed", on synthetic screenshots, in Node. Methodology: images are built from
+// Auto-align and the worker's diff, on synthetic screenshots, in Node. Methodology: images are built from
 // rectangles of known grey levels, so where a crop sits and which pixels changed is known exactly. Tiles
 // of random shades stand in for a full-page capture (distinctive everywhere, even shrunk); rows of
 // word-sized bars stand in for text, which looks alike everywhere once shrunk. Expected placements,
 // counts and overlay colours are worked out by hand, never by the code under test.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { anyChange, diffOverlay, findPlacement, isDark, type Image } from "../src/pixels.ts";
+import { anyChange, densityOverlay, diffOverlay, findPlacement, isDark, type Image } from "../src/pixels.ts";
 
 const at = (x: number, y: number) => ({ beforeX: 0, beforeY: 0, afterX: x, afterY: y });
 const placed = (before: Image, after: Image) => findPlacement(before, after).placement;
@@ -151,6 +151,28 @@ test("an unchanged pair has an empty overlay", () => {
   assert.deepEqual(diffOverlay(page, page, at(0, 0)).box, { x: 0, y: 0, width: 0, height: 0 });
 });
 
+// A retina capture scaled down to 1x has half-dark pixels wherever an edge fell between two 1x pixels.
+// Here every bar of the 2x capture sits one device pixel lower, so every bar edge is half-dark once
+// box-averaged down, as resampling makes it; only the green button really changed.
+test("at two pixel densities, reports the real change and not the resampled edges", () => {
+  const bars = (image: Image, scale: number, shift: number) => {
+    for (let y = 10; y < 90; y += 12) fill(image, 10 * scale, y * scale + shift, 160 * scale, 5 * scale, [31, 35, 40]);
+  };
+  const before = solid(200, 100, [255, 255, 255]);
+  bars(before, 1, 0);
+  const retina = solid(400, 200, [255, 255, 255]);
+  bars(retina, 2, 1);
+  fill(retina, 360, 20, 30, 20, [26, 127, 55]);
+  const after = halve(retina);
+  // The diff lights up only around the button (dilated 1px), not along the bars.
+  const { box, changed } = densityOverlay(before, after);
+  assert.ok(box.x >= 179 && box.x + box.width <= 196 && box.y >= 9 && box.y + box.height <= 21, JSON.stringify(box));
+  // Control: the same-size rule marks every shifted bar edge too (7 bars, 2 edges, 160px each), so the
+  // fixture does exercise the tolerance.
+  const strict = diffOverlay(before, after, at(0, 0)).changed;
+  assert.ok(strict > 2000 && changed < 500, `${strict} vs ${changed}`);
+});
+
 // ---------- Synthetic screenshots ----------
 
 function blank(width: number, height: number): Image {
@@ -207,5 +229,20 @@ function noise(width: number, height: number): Image {
 function crop(image: Image, left: number, top: number, width: number, height: number): Image {
   const out = blank(width, height);
   for (let y = 0; y < height; y++) out.data.set(image.data.subarray(((top + y) * image.width + left) * 4, ((top + y) * image.width + left + width) * 4), y * width * 4);
+  return out;
+}
+
+// 2x2 box average: a retina capture scaled down to 1x.
+function halve(image: Image): Image {
+  const out = blank(image.width / 2, image.height / 2);
+  for (let y = 0; y < out.height; y++) {
+    for (let x = 0; x < out.width; x++) {
+      for (let c = 0; c < 4; c++) {
+        let sum = 0;
+        for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) sum += image.data[((2 * y + dy) * image.width + 2 * x + dx) * 4 + c];
+        out.data[(y * out.width + x) * 4 + c] = Math.round(sum / 4);
+      }
+    }
+  }
   return out;
 }
