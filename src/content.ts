@@ -286,14 +286,16 @@ function ensureDiffFilters() {
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("style", "position:absolute;width:0;height:0;overflow:hidden");
   // Alpha = 6 × summed channel difference − 0.06: ignores anti-aliasing noise, saturates by ~6% change.
+  // A pair at two pixel densities differs along every glyph stem and edge once both are scaled (one dark
+  // pixel at 1x, two half-dark ones from 2x), so its filter first erodes away marks under ~2px wide.
+  // That loses hairline changes too; a wider erosion would also erase reworded text.
+  const morphs = { "": `<feMorphology operator="dilate" radius="1" />`, "-resampled": `<feMorphology operator="erode" radius="1" /><feMorphology operator="dilate" radius="2" />` };
   svg.innerHTML = Object.entries(DIFF_COLORS)
-    .map(
-      ([kind, [r, g, b]]) => `
-    <filter id="${PREFIX}-${kind}" color-interpolation-filters="sRGB">
+    .flatMap(([kind, [r, g, b]]) => Object.entries(morphs).map(([suffix, steps]) => `
+    <filter id="${PREFIX}-${kind}${suffix}" color-interpolation-filters="sRGB">
       <feColorMatrix type="matrix" values="0 0 0 0 ${r}  0 0 0 0 ${g}  0 0 0 0 ${b}  6 6 6 0 -0.06" />
-      <feMorphology operator="dilate" radius="1" />
-    </filter>`,
-    )
+      ${steps}
+    </filter>`))
     .join("");
   document.body.append(svg);
 }
@@ -367,7 +369,12 @@ function fitPair(root: HTMLElement, frame: HTMLElement, pair: Pair, showStats: S
     if (sameSize || density) {
       frame.style.setProperty("--natural-width", `${aw}px`);
       frame.style.setProperty("--aspect", String(aw / ah));
-      if (sameSize && canAutoAlign(pair)) askBackground("compare", pair, (response) => showStats(response?.stats ?? null));
+      if (!sameSize) frame.dataset.resampled = "";
+      // At two densities the compositor Diff marks every resampled edge, so the worker's diff replaces it.
+      if (canAutoAlign(pair)) askBackground("compare", pair, (response) => {
+        if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
+        showStats(response?.stats ?? null);
+      });
       return;
     }
     // Same width, different heights: usually a page that got longer or shorter, so top-aligned is right
@@ -840,6 +847,8 @@ function injectStyles() {
 .${PREFIX}-diff-layer { isolation: isolate; opacity: 0.8; }
 .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed); }
 .${PREFIX}-diff-added { filter: url(#${PREFIX}-added); }
+.${PREFIX}-frame[data-resampled] .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed-resampled); }
+.${PREFIX}-frame[data-resampled] .${PREFIX}-diff-added { filter: url(#${PREFIX}-added-resampled); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
 .${PREFIX}-diff-image { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 .${PREFIX}-frame[data-mode="diff"] .${PREFIX}-after { filter: grayscale(1); opacity: 0.25; }
