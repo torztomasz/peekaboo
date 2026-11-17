@@ -1,0 +1,25 @@
+# The gate: nothing reaches main without the whole check passing on a clean checkout.
+name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # The headless shell runs most browser tests; the packaged extension needs the full Chromium.
+      - run: npx playwright-core install --with-deps chromium chromium-headless-shell
+      - run: npm run check
+        env:
+          # Shared runners are slower than the laptop the time budgets were measured on.
+          PEEKABOO_BUDGET_SCALE: 2
+      # A build or install that changes tracked files means dist/ or the lockfile was committed stale.
+      - run: git diff --exit-code
