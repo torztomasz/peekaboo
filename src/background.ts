@@ -178,6 +178,18 @@ function findRegions(removed: Float32Array, added: Float32Array, width: number, 
       if (removed[i] > 0 || added[i] > 0) hit[((y / CELL) | 0) * cols + ((x / CELL) | 0)] = 1;
     }
   }
+  // Cells only decide what belongs together; the box is drawn round the changed pixels themselves, or its
+  // edges would stick out by however far the change sits from the 8px grid (up to 28px on screen at 4x).
+  const tighten = (bx0: number, by0: number, bx1: number, by1: number) => {
+    let x0 = bx1, y0 = by1, x1 = bx0, y1 = by0;
+    for (let y = by0; y < by1; y++) {
+      for (let x = bx0; x < bx1; x++) {
+        const i = y * width + x;
+        if (removed[i] > 0 || added[i] > 0) { x0 = Math.min(x0, x); x1 = Math.max(x1, x + 1); y0 = Math.min(y0, y); y1 = Math.max(y1, y + 1); }
+      }
+    }
+    return { x0, y0, x1, y1 };
+  };
   const seen = new Uint8Array(cols * rows);
   const regions: Region[] = [];
   // Row-major scan, so each region is found from its top edge and the list comes out top to bottom.
@@ -196,8 +208,8 @@ function findRegions(removed: Float32Array, added: Float32Array, width: number, 
         }
       }
     }
-    const x0 = left * CELL, y0 = top * CELL, x1 = Math.min(width, (right + 1) * CELL), y1 = Math.min(height, (bottom + 1) * CELL);
-    regions.push({ x: x0 / width, y: y0 / height, w: (x1 - x0) / width, h: (y1 - y0) / height });
+    const box = tighten(left * CELL, top * CELL, Math.min(width, (right + 1) * CELL), Math.min(height, (bottom + 1) * CELL));
+    regions.push({ x: box.x0 / width, y: box.y0 / height, w: (box.x1 - box.x0) / width, h: (box.y1 - box.y0) / height });
   }
   return regions;
 }
