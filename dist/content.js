@@ -146,7 +146,7 @@
     let showingBefore = true;
     let peeking = false;
     function render() {
-      let shown = mode === "diff" && !canDiff ? "flip" : mode;
+      let shown = pairMode();
       const beforeShown = shownSide();
       if (peeking && shown === "diff") shown = "flip";
       frame.dataset.mode = shown;
@@ -183,8 +183,11 @@
       }
       render();
     });
+    function pairMode() {
+      return mode === "diff" && !canDiff ? "flip" : mode;
+    }
     function flip() {
-      if (frame.dataset.mode !== "flip") return;
+      if (pairMode() !== "flip") return;
       showingBefore = !showingBefore;
       render();
     }

@@ -201,8 +201,7 @@ function buildStage(pair: Pair) {
   let peeking = false;
 
   function render() {
-    // Blend modes over video need every copy in step; a still-frame diff would mislead, so videos flip instead.
-    let shown = mode === "diff" && !canDiff ? "flip" : mode;
+    let shown = pairMode();
     const beforeShown = shownSide();
     if (peeking && shown === "diff") shown = "flip";
     frame.dataset.mode = shown;
@@ -244,8 +243,14 @@ function buildStage(pair: Pair) {
     }
     render();
   });
+  // Blend modes over video need every copy in step; a still-frame diff would mislead, so videos flip instead.
+  function pairMode() {
+    return mode === "diff" && !canDiff ? "flip" : mode;
+  }
+
+  // The pair's own mode, not the frame's: peeking in Diff shows the frame as Flip for a moment.
   function flip() {
-    if (frame.dataset.mode !== "flip") return;
+    if (pairMode() !== "flip") return;
     showingBefore = !showingBefore;
     render();
   }

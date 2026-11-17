@@ -32,9 +32,12 @@ export function conversation({ comments = 300, every = 50 } = {}) {
   return `<!doctype html><html><head><meta charset="utf-8"></head><body><div class="timeline">${items.join("")}</div></body></html>`;
 }
 
-// Loads `html`, then the content script built from `entry` (default: this checkout's), the way Chrome
-// injects it at document_end. `before` runs first in the page, e.g. to wrap DOM APIs for counting.
-export async function openConversation(html, { entry = new URL("../src/content.ts", import.meta.url).pathname, before } = {}) {
+// Loads `html`, then the content script built from `entry` (default: PEEKABOO_CONTENT, else this
+// checkout's, so the tests can run against another version), the way Chrome injects it at document_end.
+// `before` runs first in the page, e.g. to wrap DOM APIs for counting.
+const DEFAULT_ENTRY = process.env.PEEKABOO_CONTENT || new URL("../src/content.ts", import.meta.url).pathname;
+
+export async function openConversation(html, { entry = DEFAULT_ENTRY, before } = {}) {
   const browser = await launch();
   const page = await browser.newPage();
   await page.setContent(html);

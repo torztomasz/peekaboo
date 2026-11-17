@@ -3,7 +3,7 @@
 // mutation, so this cost is paid on every page, tables or not.
 //
 // How: a 600-comment conversation with 10 Before/After tables runs 600 frames of that churn, then 200
-// flips. Reported per phase: full-document scans (querySelectorAll calls, counted by wrapping the DOM
+// flips, then 200 Shift peeks (press and release over a pair). Reported per phase: full-document scans (querySelectorAll calls, counted by wrapping the DOM
 // API: deterministic, so it's the number to compare) and main-thread script and style time from Chrome's
 // own metrics, minus the same run with no script loaded (median of RUNS; wall clock, so only roughly).
 //
@@ -70,23 +70,36 @@ async function measure(entry) {
     };
     requestAnimationFrame(tick);
   }));
+  const peeks = await phase(() => new Promise((resolve) => {
+    document.querySelector(".peekaboo-frame")?.dispatchEvent(new PointerEvent("pointerenter"));
+    let peek = 0;
+    const tick = () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift", bubbles: true }));
+      requestAnimationFrame(() => {
+        document.dispatchEvent(new KeyboardEvent("keyup", { key: "Shift", bubbles: true }));
+        if (++peek < 200) requestAnimationFrame(tick);
+        else requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+    };
+    requestAnimationFrame(tick);
+  }));
   const widgets = await page.evaluate(() => document.querySelectorAll(".peekaboo").length);
   await browser.close();
-  return { churn, flips, widgets };
+  return { churn, flips, peeks, widgets };
 }
 
 async function medianOf(entry) {
   const runs = [];
   for (let i = 0; i < RUNS; i++) runs.push(await measure(entry));
   const pick = (phase, key) => median(runs.map((run) => run[phase][key]));
-  return Object.fromEntries(["churn", "flips"].map((phase) => [phase, { scans: pick(phase, "scans"), scriptMs: pick(phase, "scriptMs"), styleMs: pick(phase, "styleMs") }]).concat([["widgets", runs[0].widgets]]));
+  return Object.fromEntries(["churn", "flips", "peeks"].map((phase) => [phase, { scans: pick(phase, "scans"), scriptMs: pick(phase, "scriptMs"), styleMs: pick(phase, "styleMs") }]).concat([["widgets", runs[0].widgets]]));
 }
 
 const none = await medianOf(blank);
 for (const entry of entries) {
   const result = await medianOf(entry);
   console.log(entry);
-  for (const phase of ["churn", "flips"]) {
+  for (const phase of ["churn", "flips", "peeks"]) {
     const r = result[phase], base = none[phase];
     console.log(`  ${phase.padEnd(6)} ${String(r.scans).padStart(5)} scans   script +${(r.scriptMs - base.scriptMs).toFixed(1)} ms   style+layout +${(r.styleMs - base.styleMs).toFixed(1)} ms`);
   }

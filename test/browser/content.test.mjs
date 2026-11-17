@@ -79,3 +79,45 @@ test("unrelated page churn and Flip never re-scan the page", async () => {
     await counted.browser.close();
   }
 });
+
+// ---------- Hold to peek ----------
+
+async function withPage(run) {
+  const opened = await openConversation(conversation({ comments: 20, every: 10 }));
+  try {
+    await run(opened.page);
+  } finally {
+    await opened.browser.close();
+  }
+}
+
+test("holding Shift over a pair shows the other side, and letting go comes back", async () => {
+  await withPage(async (page) => {
+    const frame = page.locator(".peekaboo-frame").first();
+    const state = () => frame.evaluate((node) => `${node.dataset.mode}:${node.dataset.showing}`);
+    await frame.hover();
+    await page.keyboard.down("Shift");
+    assert.equal(await state(), "flip:after");
+    await page.keyboard.up("Shift");
+    assert.equal(await state(), "flip:before");
+    await page.getByRole("button", { name: "Diff" }).first().click();
+    await frame.hover();
+    await page.keyboard.down("Shift");
+    assert.equal(await state(), "flip:after");
+    await page.keyboard.up("Shift");
+    assert.equal(await frame.evaluate((node) => node.dataset.mode), "diff");
+  });
+});
+
+test("a click while peeking in Diff doesn't change which side Flip shows later", async () => {
+  await withPage(async (page) => {
+    const frame = page.locator(".peekaboo-frame").first();
+    await page.getByRole("button", { name: "Diff" }).first().click();
+    await frame.hover();
+    await page.keyboard.down("Shift");
+    await frame.dispatchEvent("pointerdown");
+    await page.keyboard.up("Shift");
+    await page.getByRole("button", { name: "Flip" }).first().click();
+    assert.equal(await frame.evaluate((node) => node.dataset.showing), "before");
+  });
+});
