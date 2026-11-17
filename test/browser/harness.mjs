@@ -2,7 +2,7 @@
 //
 // How: the page is served at a github.com URL from a route, so the script sees the origin it ships for
 // (localStorage works, as it doesn't on about:blank) and no request leaves the machine: anything but
-// the navigation to the pull request itself is aborted and recorded in `requests`. Tables are marked up the way GitHub renders
+// the tab's own navigation to the pull request is aborted and recorded in `requests`. Tables are marked up the way GitHub renders
 // markdown (copied from a real pull request's body_html: the custom-element wrapper, role="table", images
 // inside links with an inline max-width). Every test gets its own browser context, so a saved mode or
 // alignment never leaks from one test into the next.
@@ -72,7 +72,8 @@ async function openPullRequest(browser, html, { auto = false, granted = true, se
   const requests = [];
   await context.route("**/*", (route) => {
     const url = route.request().url();
-    if (url === PR_URL && route.request().isNavigationRequest()) return route.fulfill({ contentType: "text/html", body: html });
+    const isThePage = url === PR_URL && route.request().isNavigationRequest() && !route.request().frame().parentFrame();
+    if (isThePage) return route.fulfill({ contentType: "text/html", body: html });
     const body = serve[url]?.(route.request().resourceType());
     if (body) return route.fulfill({ contentType: "image/png", headers: { "access-control-allow-origin": "*" }, body });
     if (!serve[url]) requests.push(url);
