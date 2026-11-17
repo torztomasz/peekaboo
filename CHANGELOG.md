@@ -7,14 +7,12 @@ What changed for people reviewing pull requests with Peekaboo. Each version is a
 
 ### Added
 
+- **Retina next to normal.** A 2x capture beside a 1x one no longer lights up every letter and outline in
+  Diff; with Auto on, only what really changed shows. Without Auto, most of the edge noise is filtered out too.
 - **Hold Shift to peek.** Hold Shift over a pair to see the other side, let go to come back: no clicking twice
   and remembering which side is up. In Diff it shows the plain After under the colours, so you can see what a
   red or green patch is. Works in full screen too, and does nothing while you're typing in a comment.
-- **Same-picture warning.** With Auto on, a pair whose Before and After are pixel-identical says so. The same
-  screenshot uploaded twice otherwise looks exactly like a clean Diff, and a reviewer approves a change
-  nobody captured.
-- **Retina next to normal.** A 2x capture beside a 1x one no longer lights up every letter and outline in
-  Diff; with Auto on, only what really changed shows. Without Auto, most of the edge noise is filtered out too.
+- With Auto on, a pair whose Before and After are pixel-identical says so, since that looks just like a clean Diff.
 
 ### Changed
 
