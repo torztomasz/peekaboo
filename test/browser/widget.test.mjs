@@ -53,7 +53,7 @@ test("leaves alone tables that aren't Before/After pairs or aren't in a comment"
 
 // "Side by side" promises GitHub's own rendering, so the table must come through byte for byte.
 test("keeps GitHub's table as rendered, hidden under the widget, and Side by side brings it back", async () => {
-  const noteTable = () => (window.rendered = document.querySelector("table").innerHTML);
+  const noteTable = () => (window.rendered = document.querySelector("table").outerHTML);
   await withPullRequest(browser, pullRequest(pair(beforeShot, afterShot)), { before: noteTable }, async ({ page }) => {
     assert.equal(await page.locator("table").isVisible(), false);
     assert.equal(await frames(page).isVisible(), true);
@@ -61,7 +61,13 @@ test("keeps GitHub's table as rendered, hidden under the widget, and Side by sid
     assert.equal(await page.locator("table").isVisible(), true);
     assert.equal(await frames(page).isVisible(), false);
     assert.equal(await page.getByRole("button", { name: "Full screen" }).isVisible(), false);
-    assert.equal(await page.evaluate(() => document.querySelector("table").innerHTML === window.rendered), true);
+    // All the extension may leave on it is its own "seen this one" mark.
+    const now = await page.evaluate(() => {
+      const table = document.querySelector("table").cloneNode(true);
+      table.removeAttribute("data-peekaboo");
+      return [table.outerHTML, window.rendered];
+    });
+    assert.equal(now[0], now[1]);
   });
 });
 
@@ -137,17 +143,19 @@ const recordings = pullRequest(table({ rows: [[recording("before"), recording("a
 const recordPlayback = () => {
   window.playback = [];
   const proto = HTMLMediaElement.prototype;
-  proto.play = function () { window.playback.push("play"); return Promise.resolve(); };
-  proto.pause = function () { window.playback.push("pause"); };
-  Object.defineProperty(proto, "currentTime", { set: (time) => window.playback.push(`seek ${time}`), get: () => 3 });
+  const side = (video) => video.src.match(/(before|after)\.mp4$/)[1];
+  proto.play = function () { window.playback.push(`play ${side(this)}`); return Promise.resolve(); };
+  proto.pause = function () { window.playback.push(`pause ${side(this)}`); };
+  Object.defineProperty(proto, "currentTime", { set(time) { window.playback.push(`seek ${side(this)} ${time}`); }, get: () => 3 });
 };
 
 test("recordings get a Play button that starts both from the beginning together, and pauses both", async () => {
   await withPullRequest(browser, recordings, { before: recordPlayback }, async ({ page }) => {
     await page.getByRole("button", { name: "▶ Play" }).click();
-    assert.deepEqual(await page.evaluate(() => window.playback.splice(0)), ["seek 0", "play", "seek 0", "play"]);
+    const calls = async () => (await page.evaluate(() => window.playback.splice(0))).sort();
+    assert.deepEqual(await calls(), ["play after", "play before", "seek after 0", "seek before 0"]);
     await page.getByRole("button", { name: "❚❚ Pause" }).click();
-    assert.deepEqual(await page.evaluate(() => window.playback), ["pause", "pause"]);
+    assert.deepEqual(await calls(), ["pause after", "pause before"]);
     assert.equal(await page.getByRole("button", { name: "▶ Play" }).count(), 1);
   });
   await withPullRequest(browser, pullRequest(pair(beforeShot, afterShot)), {}, async ({ page }) => {

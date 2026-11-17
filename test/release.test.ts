@@ -54,7 +54,5 @@ test("the release zip holds every file the extension loads, and only the extensi
     ...Object.values<string>(manifest.action.default_icon),
     ...Array.from(read("options.html").matchAll(/\b(?:src|href)="([^"#:]+)"/g), (match) => match[1]),
   ];
-  for (const path of new Set(loaded)) assert.ok(files.includes(`peekaboo/${path}`), `${path} is missing from the zip`);
-  const stray = files.filter((path) => !/^peekaboo\/(manifest\.json|options\.html|dist\/[a-z]+\.js|icons\/[^/]+\.(png|svg))$/.test(path));
-  assert.deepEqual(stray, []);
+  assert.deepEqual(files.sort(), Array.from(new Set(loaded), (path) => `peekaboo/${path}`).sort());
 });

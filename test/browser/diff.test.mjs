@@ -48,7 +48,7 @@ test("Diff widens a hairline change so it can be seen", async () => {
     await diffMode(page);
     const seen = await pixels(frame(page));
     for (const y of [249, 250, 251]) assert.ok(isGreen(seen.at(201, y + 1)), `row ${y}: ${seen.at(201, y + 1)}`);
-    assert.ok(isNeutral(seen.at(201, 254 + 1)), "but not by more than a pixel");
+    for (const y of [248, 252]) assert.ok(isNeutral(seen.at(201, y + 1)), `row ${y}, a pixel further out: ${seen.at(201, y + 1)}`);
   });
 });
 
@@ -122,7 +122,10 @@ test("Diff compares only where both screenshots reach and hatches the rest as No
     await diffMode(page);
     const seen = await pixels(frame(page));
     assert.ok(isRed(seen.at(81, 61)), `removed inside the overlap: ${seen.at(81, 61)}`);
-    assert.ok(isNeutral(seen.at(351, 151)), `outside the overlap: ${seen.at(351, 151)}`);
+    // Outside the overlap, through Before's block: a row of the hatch, which is white with thin grey lines.
+    const strip = Array.from({ length: 40 }, (_, x) => seen.at(321 + x, 151));
+    assert.ok(!strip.some((rgb) => isRed(rgb) || isGreen(rgb)), `no red or green outside the overlap: ${strip}`);
+    assert.ok(strip.some(([r]) => r >= 250) && strip.some(([r]) => r <= 240), `hatched, not blank: ${strip.map(([r]) => r)}`);
     assert.equal(await page.getByText("Not compared").isVisible(), true);
   });
 });

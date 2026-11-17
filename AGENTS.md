@@ -2,7 +2,7 @@
 
 The tests are the specification: this code is written by agents, and the owner reads behaviour, not diffs.
 `npm run check` is the gate (types, pixel tests, browser tests, the packaged extension, time budgets). CI
-runs it on every push and pull request.
+runs it on every pull request and every push to main.
 
 ## Before every commit
 
