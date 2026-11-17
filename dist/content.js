@@ -143,8 +143,9 @@
       if (peeking && shown === "diff") shown = "flip";
       frame.dataset.mode = shown;
       legend.dataset.mode = shown;
-      beforeTag.textContent = shown === "diff" ? "Darker before" : "Before";
-      afterTag.textContent = shown === "diff" ? "Darker after" : "After";
+      const toneKnown = Boolean(frame.dataset.tone);
+      beforeTag.textContent = shown === "diff" && toneKnown ? "Removed" : "Before";
+      afterTag.textContent = shown === "diff" && toneKnown ? "Added" : "After";
       after.style.visibility = shown === "flip" && beforeShown ? "hidden" : "visible";
       if (shown === "diff") {
         if (!diff.hasChildNodes()) diff.append(...buildDiffLayers(pair.before, pair.after));
@@ -159,6 +160,10 @@
       if (!peeking) return showingBefore;
       return mode === "diff" ? false : !showingBefore;
     }
+    frame.addEventListener("peekaboo:tone", (event) => {
+      frame.dataset.tone = event.detail ? "dark" : "light";
+      render();
+    });
     frame.addEventListener("peekaboo:diff", (event) => {
       const url = event.detail;
       diff.replaceChildren();
@@ -231,6 +236,7 @@
     return group;
   }
   var DIFF_COLORS = { removed: [0.86, 0.14, 0.18], added: [0.1, 0.72, 0.3] };
+  var rgb = (color) => `rgb(${color.map((channel) => Math.round(channel * 255)).join(" ")})`;
   function ensureDiffFilters() {
     if (document.getElementById(`${PREFIX}-filters`)) return;
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -295,6 +301,7 @@
         const width = Math.min(bw, aw);
         const sameShape = Math.abs(bh * width / bw - ah * width / aw) <= 1;
         if (canAutoAlign(pair) && sameShape) askBackground("compare", pair, (response) => {
+          showTone(frame, response?.dark);
           if (response?.diff) frame.dispatchEvent(new CustomEvent("peekaboo:diff", { detail: response.diff }));
           showSame(response?.same ?? null);
         });
@@ -306,6 +313,7 @@
         root.style.setProperty("--aspect", String(aw / Math.max(bh, ah)));
         if (!canAutoAlign(pair) || loadAlign() !== "auto") return;
         askBackground("align", pair, (response) => {
+          showTone(frame, response?.dark);
           const p = response?.placement;
           if (!p || !p.beforeY && !p.afterY) return;
           root.insertBefore(buildAlignBar(root, pair, [bw, bh], [aw, ah], showSame, { placement: p, diff: response.diff, same: response.same }), frame.nextSibling);
@@ -318,6 +326,9 @@
       media.addEventListener(media instanceof HTMLImageElement ? "load" : "loadedmetadata", apply, { once: true });
     }
     apply();
+  }
+  function showTone(frame, dark) {
+    if (typeof dark === "boolean") frame.dispatchEvent(new CustomEvent("peekaboo:tone", { detail: dark }));
   }
   var canAutoAlign = (pair) => CAN_AUTO && pair.before instanceof HTMLImageElement && pair.after instanceof HTMLImageElement;
   function askBackground(type, pair, done) {
@@ -400,6 +411,7 @@
       status.textContent = "Lining up\u2026";
       askBackground("align", pair, (response) => {
         status.replaceChildren();
+        showTone(frame, response?.dark);
         if (response?.placement) {
           autoPlacement = response.placement;
           autoDiff = response.diff;
@@ -724,8 +736,10 @@
 /* Wide enough for "Before", so the hint beside it doesn't shift on each flip. */
 .${PREFIX}-legend[data-mode="flip"] .${PREFIX}-tag { box-sizing: border-box; min-width: 56px; padding: 0 8px; border-radius: 999px; text-align: center; color: var(--fgColor-default, #1f2328); background: var(--bgColor-neutral-muted, #818b981f); }
 .${PREFIX}-legend[data-mode="flip"] .${PREFIX}-tag-after { color: var(--fgColor-accent, #0969da); background: var(--bgColor-accent-muted, #ddf4ff); }
-.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-before { color: var(--fgColor-danger, #d1242f); }
-.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-after { color: var(--fgColor-success, #1a7f37); }
+/* Diff: a swatch of each colour the frame paints, so the key reads by colour rather than by the word. */
+.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag { display: inline-flex; align-items: center; gap: 6px; color: var(--fgColor-default, #1f2328); }
+.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag::before { content: ""; width: 10px; height: 10px; border-radius: 2px; background: ${rgb(DIFF_COLORS.removed)}; }
+.${PREFIX}-legend[data-mode="diff"] .${PREFIX}-tag-after::before { background: ${rgb(DIFF_COLORS.added)}; }
 .${PREFIX}-flip-hint, .${PREFIX}-not-compared { display: none; font-weight: 400; }
 .${PREFIX}-legend[data-mode="flip"] .${PREFIX}-flip-hint { display: inline; }
 /* Full screen has its own key row. */
@@ -739,6 +753,10 @@
 .${PREFIX}-diff-added { filter: url(#${PREFIX}-added); }
 .${PREFIX}-frame[data-resampled] .${PREFIX}-diff-removed { filter: url(#${PREFIX}-removed-resampled); }
 .${PREFIX}-frame[data-resampled] .${PREFIX}-diff-added { filter: url(#${PREFIX}-added-resampled); }
+.${PREFIX}-frame[data-tone="dark"] .${PREFIX}-diff-removed { filter: url(#${PREFIX}-added); }
+.${PREFIX}-frame[data-tone="dark"] .${PREFIX}-diff-added { filter: url(#${PREFIX}-removed); }
+.${PREFIX}-frame[data-resampled][data-tone="dark"] .${PREFIX}-diff-removed { filter: url(#${PREFIX}-added-resampled); }
+.${PREFIX}-frame[data-resampled][data-tone="dark"] .${PREFIX}-diff-added { filter: url(#${PREFIX}-removed-resampled); }
 .${PREFIX}-frame:not([data-mode="diff"]) .${PREFIX}-diff { display: none; }
 .${PREFIX}-diff-image { grid-area: 1 / 1; display: block; width: 100%; max-width: none; height: auto; align-self: start; }
 /* Opaque, so the hatch below shows only where After doesn't cover (not compared); same look as 25% over white. */

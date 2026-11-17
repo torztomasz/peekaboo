@@ -62,7 +62,7 @@
 
   <section id="auto" aria-labelledby="autoTitle">
     <h2 id="autoTitle">Auto-align screenshots of different sizes</h2>
-    <p>When the Before and After were captured at different window widths, or one is a crop of the other, Peekaboo can find where they line up and show only what really changed. It also warns when Before and After are the same picture.</p>
+    <p>When the Before and After were captured at different window widths, or one is a crop of the other, Peekaboo can find where they line up and show only what really changed. It also warns when Before and After are the same picture, and tells dark screenshots from light ones so Diff's red and green mean removed and added on both.</p>
     <p class="muted">For that it reads the two images from GitHub's image server. Nothing else is read, nothing is sent anywhere, and Chrome asks you once.</p>
     <div class="state" id="state"><span class="dot"></span><span id="stateText">Off</span></div>
     <div class="actions">
@@ -74,7 +74,7 @@
 
   <section aria-labelledby="useTitle">
     <h2 id="useTitle">How to use it</h2>
-    <p><b>Flip</b> is the default: click the picture or press <kbd>Space</kbd> to swap Before and After, or hold <kbd>Shift</kbd> over it to peek at the other side. <b>Diff</b> lights up only the pixels that changed: red where Before is darker, green where After is darker. <b>Full screen</b> steps through every pair with <kbd class="arrow">←</kbd> <kbd class="arrow">→</kbd>.</p>
+    <p><b>Flip</b> is the default: click the picture or press <kbd>Space</kbd> to swap Before and After, or hold <kbd>Shift</kbd> over it to peek at the other side. <b>Diff</b> lights up only the pixels that changed: red for what was removed, green for what was added. <b>Full screen</b> steps through every pair with <kbd class="arrow">←</kbd> <kbd class="arrow">→</kbd>.</p>
   </section>
 
   <section aria-labelledby="tableTitle">

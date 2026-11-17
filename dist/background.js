@@ -79,14 +79,20 @@
       placement = beforeIsWide ? { beforeX: 0, beforeY: 0, afterX: dx, afterY: 0 } : { beforeX: dx, beforeY: 0, afterX: 0, afterY: 0 };
     }
     const changes = changeMaps(b, a, placement);
-    return { placement, diff: await diffImage(changes), same: exact ? changes.changed === 0 : null };
+    const dark = isDark(b, a);
+    return { placement, diff: await diffImage(changes, dark), same: exact ? changes.changed === 0 : null, dark };
   }
   var AS_IS = { beforeX: 0, beforeY: 0, afterX: 0, afterY: 0 };
   async function compare({ before, after }) {
     if (!await chrome.permissions.contains({ origins: IMAGE_ORIGINS })) return { needsPermission: true };
     const [b, a] = await Promise.all([load(before), load(after)]);
     if (b.width !== a.width || b.height !== a.height) return compareDensities(b, a);
-    return { same: changeMaps(b, a, AS_IS).changed === 0 };
+    return { same: changeMaps(b, a, AS_IS).changed === 0, dark: isDark(b, a) };
+  }
+  function isDark(before, after) {
+    const mean = ({ data }) => data.reduce((sum, value) => sum + value, 0) / data.length;
+    const small = (bitmap) => gray(bitmap, Math.min(1, 200 / bitmap.width), 0, bitmap.height);
+    return (mean(small(before)) + mean(small(after))) / 2 < 128;
   }
   function slideSideways(wide, narrow) {
     const slack = wide.width - narrow.width;
@@ -171,7 +177,8 @@
   async function compareDensities(before, after) {
     const width = Math.min(before.width, after.width);
     const changes = tolerantChangeMaps(resample(before, width), resample(after, width));
-    return { same: changes.changed === 0, diff: await diffImage(changes) };
+    const dark = isDark(before, after);
+    return { same: changes.changed === 0, dark, diff: await diffImage(changes, dark) };
   }
   function resample(bitmap, width) {
     const height = Math.round(bitmap.height * width / bitmap.width);
@@ -235,7 +242,8 @@
     }
     return { removed, added, width, height, changed };
   }
-  async function diffImage({ removed, added, width, height }) {
+  async function diffImage({ removed, added, width, height }, dark) {
+    const [darkerBefore, darkerAfter] = dark ? [ADDED, REMOVED] : [REMOVED, ADDED];
     const out = new ImageData(width, height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -246,7 +254,7 @@
           r = Math.max(r, removed[yy * width + xx]);
           g = Math.max(g, added[yy * width + xx]);
         }
-        const [color, alpha] = r >= g ? [REMOVED, r] : [ADDED, g];
+        const [color, alpha] = r >= g ? [darkerBefore, r] : [darkerAfter, g];
         const i = (y * width + x) * 4;
         out.data[i] = color[0];
         out.data[i + 1] = color[1];
