@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name        peekaboo
 // @namespace   torztomasz
-// @version     1.5.0
+// @version     1.6.0
 // @description Flip or pixel-diff the Before/After screenshots in GitHub pull requests and issues. Same code as the Peekaboo Chrome extension, packaged as a userscript for Ardia, Violentmonkey or Tampermonkey.
 // @match       https://github.com/*
 // @run-at      document-end
