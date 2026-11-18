@@ -51,7 +51,8 @@
   }
   function removeOrphanWidgets() {
     for (const widget of document.querySelectorAll(`.${PREFIX}`)) {
-      if (!(widget.nextElementSibling instanceof HTMLTableElement)) widget.remove();
+      const next = widget.nextElementSibling;
+      if (!(next instanceof HTMLTableElement) || !next.dataset[PROCESSED]) widget.remove();
     }
   }
   function readPairs(table) {
