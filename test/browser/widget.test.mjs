@@ -4,7 +4,7 @@
 // things sit, and the colour Chromium paints inside the frame (white is Before, blue is After).
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { image, launch, pair, picture, pixels, pullRequest, settle, table, withPullRequest } from "./harness.mjs";
+import { draw, image, launch, offsetWithin, pair, picture, pixels, pullRequest, ready, settle, table, withPullRequest } from "./harness.mjs";
 
 const WHITE = [255, 255, 255], BLUE = [120, 160, 255];
 const beforeShot = picture(400, 300, WHITE), afterShot = picture(400, 300, BLUE);
@@ -20,14 +20,20 @@ const visibleTags = (page) => page.locator(".peekaboo-tag:visible").allTextConte
 
 // ---------- Which tables ----------
 
+// The label is the other columns' text, not words written next to a screenshot; a pair without other
+// columns has no label at all.
 test("finds Before and After by header, whatever the column order, and labels the pair from the other columns", async () => {
-  const html = pullRequest(table({
-    headers: ["", "AFTER: this PR", "Theme", "Before (main)"],
-    rows: [["<strong>Mobile</strong>", image(afterShot), "Dark", image(beforeShot)]],
-  }));
+  const html = pullRequest(
+    table({
+      headers: ["", "AFTER: this PR", "Theme", "Before (main)"],
+      rows: [["<strong>Mobile</strong>", image(afterShot), "Dark", `${image(beforeShot)} v1.4`]],
+    }),
+    table({ headers: ["After", "Before"], rows: [[image(afterShot), image(beforeShot)]] }),
+  );
   await withPullRequest(browser, html, {}, async ({ page }) => {
-    assert.equal(await page.locator(".peekaboo figcaption").textContent(), "Mobile · Dark");
-    assert.deepEqual(await shownColor(frames(page)), WHITE, "Flip starts on the Before column's screenshot");
+    assert.deepEqual(await page.locator(".peekaboo figcaption").allTextContents(), ["Mobile · Dark"]);
+    const shown = [await shownColor(frames(page).nth(0)), await shownColor(frames(page).nth(1))];
+    assert.deepEqual(shown, [WHITE, WHITE], "Flip starts on the Before column's screenshot");
   });
 });
 
@@ -43,11 +49,13 @@ test("leaves alone tables that aren't Before/After pairs or aren't in a comment"
   const html = pullRequest(
     table({ headers: ["Name", "Value"], rows: bothShots }),
     table({ headers: ["Before", "Result"], rows: bothShots }),
+    table({ headers: ["Shown before login", "After"], rows: bothShots }),
+    table({ headers: ["Before", "Shown after login"], rows: bothShots }),
     table({ rows: [["old text", "new text"]] }),
   ).replace("</body>", `<div class="file-diff">${pair(beforeShot, afterShot)}</div></body>`);
   await withPullRequest(browser, html, {}, async ({ page }) => {
     assert.equal(await page.locator(".peekaboo").count(), 0);
-    assert.equal(await page.locator("table:visible").count(), 4);
+    assert.equal(await page.locator("table:visible").count(), 6);
   });
 });
 
@@ -78,7 +86,7 @@ test("a mode picked on one table applies to every table and is remembered on the
   await withPullRequest(browser, html, {}, async ({ page, reload }) => {
     assert.equal(await pressed(page, "Flip"), 2, "Flip is the default");
     await page.getByRole("button", { name: "Diff" }).nth(1).click();
-    assert.equal(await pressed(page, "Diff"), 2);
+    assert.deepEqual([await pressed(page, "Diff"), await pressed(page, "Flip")], [2, 0]);
     await reload();
     assert.equal(await pressed(page, "Diff"), 2);
     await page.getByRole("button", { name: "Side by side" }).first().click();
@@ -113,14 +121,21 @@ test("keeps the clicked toolbar where it is on screen while the tables above it 
 
 // ---------- Flip ----------
 
+// Space on the focused pair flips it rather than scrolling the conversation. Without the extension
+// nothing can tell whether the two are the same picture, so nothing says so.
 test("Flip swaps the picture on click, Space and Enter, and says which side is showing", async () => {
-  await withPullRequest(browser, pullRequest(pair(beforeShot, afterShot)), {}, async ({ page }) => {
+  const html = pullRequest(pair(beforeShot, afterShot), "<p style='height: 2000px'>More of the conversation</p>");
+  await withPullRequest(browser, html, {}, async ({ page }) => {
     const frame = frames(page);
     const showing = async () => [await shownColor(frame), await visibleTags(page)];
     assert.deepEqual(await showing(), [WHITE, ["Before"]]);
+    assert.equal(await page.getByText("Click to flip").isVisible(), true);
+    assert.equal(await page.getByText("No visible difference", { exact: false }).isVisible(), false);
     await frame.click();
     assert.deepEqual(await showing(), [BLUE, ["After"]]);
     await page.keyboard.press("Space");
+    await settle(page);
+    assert.equal(await page.evaluate(() => scrollY), 0, "Space scrolled the page");
     assert.deepEqual(await showing(), [WHITE, ["Before"]]);
     await page.keyboard.press("Enter");
     assert.deepEqual(await showing(), [BLUE, ["After"]]);
@@ -132,6 +147,68 @@ test("each pair flips on its own", async () => {
   await withPullRequest(browser, html, {}, async ({ page }) => {
     await frames(page).nth(1).click();
     assert.deepEqual([await shownColor(frames(page).nth(0)), await shownColor(frames(page).nth(1))], [WHITE, BLUE]);
+  });
+});
+
+// ---------- Hold to peek ----------
+
+// Shift also types capitals and is part of other shortcuts, so it peeks only at the pair under the mouse,
+// never while a text field has focus, and a peek ends with Shift or with the window losing focus (where
+// the key-up never arrives), not with another key.
+test("Shift peeks only at the pair under the mouse, not while typing, until Shift is let go or the window loses focus", async () => {
+  const html = pullRequest(pair(beforeShot, afterShot)).replace("</body>", "<textarea aria-label='Comment'></textarea></body>");
+  await withPullRequest(browser, html, {}, async ({ page }) => {
+    const frame = frames(page);
+    const holdingShift = async (action) => {
+      await page.keyboard.down("Shift");
+      try {
+        return await action();
+      } finally {
+        await page.keyboard.up("Shift");
+      }
+    };
+    await page.mouse.move(5, 5);
+    assert.deepEqual(await holdingShift(() => shownColor(frame)), WHITE, "with nothing under the mouse");
+    await frame.hover();
+    await holdingShift(async () => {
+      assert.deepEqual(await shownColor(frame), BLUE, "over the pair");
+      await page.keyboard.press("x");
+      assert.deepEqual(await shownColor(frame), BLUE, "another key pressed meanwhile");
+      await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      assert.deepEqual(await shownColor(frame), WHITE, "once the window lost focus");
+    });
+    await page.mouse.move(5, 5);
+    assert.deepEqual(await holdingShift(() => shownColor(frame)), WHITE, "after the mouse left the pair");
+    await page.getByRole("textbox", { name: "Comment" }).focus();
+    await frame.hover();
+    assert.deepEqual(await holdingShift(() => shownColor(frame)), WHITE, "while typing in a text field");
+  });
+});
+
+// ---------- Screenshots that arrive late ----------
+
+// GitHub adds comments to an open page, and their screenshots finish loading after the table is there.
+test("a comment whose screenshots load after it arrives is laid out once they have", async () => {
+  const host = "https://private-user-images.githubusercontent.com/1/";
+  let release;
+  const loaded = new Promise((resolve) => (release = resolve));
+  const later = (png) => async () => (await loaded, png);
+  const serve = { [`${host}wide.png`]: later(draw(400, 300, WHITE)), [`${host}narrow.png`]: later(draw(300, 300, BLUE)) };
+  await withPullRequest(browser, pullRequest(""), { serve }, async ({ page }) => {
+    await page.evaluate((table) => {
+      const item = document.createElement("div");
+      item.className = "timeline-item";
+      item.innerHTML = `<div class="markdown-body">${table}</div>`;
+      document.querySelector(".timeline").append(item);
+    }, pair(`${host}wide.png`, `${host}narrow.png`));
+    await settle(page);
+    assert.equal(await frames(page).count(), 1, "control: the pair is there before its screenshots");
+    release();
+    await ready(page);
+    assert.equal(await page.locator(".peekaboo-align").count(), 1);
+    const canvas = page.locator(".peekaboo-canvas");
+    assert.deepEqual(await offsetWithin(page.locator("img.peekaboo-after"), canvas), { x: 0, y: 0, width: 300, height: 300 });
+    assert.deepEqual(await offsetWithin(page.locator("img.peekaboo-before"), canvas), { x: 0, y: 0, width: 400, height: 300 });
   });
 });
 
@@ -162,6 +239,15 @@ test("recordings get a Play button that starts both from the beginning together,
   });
   await withPullRequest(browser, pullRequest(pair(beforeShot, afterShot)), {}, async ({ page }) => {
     assert.equal(await page.getByRole("button", { name: "▶ Play" }).count(), 0, "screenshots have nothing to play");
+  });
+});
+
+// A table can mix recordings and screenshots; Play runs the recordings and leaves the screenshots be.
+test("Play in a table that also has screenshots plays only the recordings", async () => {
+  const html = pullRequest(table({ rows: [[recording("before"), recording("after")], [image(beforeShot), image(afterShot)]] }));
+  await withPullRequest(browser, html, { before: recordPlayback }, async ({ page }) => {
+    await page.getByRole("button", { name: "▶ Play" }).click();
+    assert.deepEqual(await page.evaluate(() => window.playback), { before: ["seek 0", "play"], after: ["seek 0", "play"] });
   });
 });
 

@@ -17,8 +17,10 @@ test("turns each Before/After table into a widget and leaves other tables alone"
   assert.equal(await page.evaluate(() => document.querySelectorAll("table:not([hidden])").length), 1);
 });
 
+// In the same task as a timestamp ticking elsewhere, as GitHub's live updates arrive.
 test("picks up a comment that arrives later, table nested inside it", async () => {
   await page.evaluate((table) => {
+    document.querySelector("#item-0 relative-time").textContent = "just now";
     const item = document.createElement("div");
     item.className = "timeline-item";
     item.innerHTML = `<div class="markdown-body">${table}</div>`;
@@ -41,6 +43,13 @@ test("drops a widget whose table GitHub removed", async () => {
   assert.equal(await widgets(), 2);
 });
 
+// The table element alone, its wrapper left in place.
+test("drops a widget whose table GitHub removed on its own", async () => {
+  await page.evaluate(() => document.querySelector(".timeline > .timeline-item:last-child table").remove());
+  await settle(page);
+  assert.equal(await widgets(), 1);
+});
+
 // GitHub can render a fresh table in place of the old one, leaving its wrapper (and so the widget before
 // it) where it was. The old widget goes, the new table gets one of its own and is hidden under it.
 test("rebuilds a table GitHub replaced on its own, without leaving the old widget", async () => {
@@ -52,7 +61,7 @@ test("rebuilds a table GitHub replaced on its own, without leaving the old widge
     table.replaceWith(fresh);
   });
   await settle(page);
-  assert.equal(await widgets(), 2);
+  assert.equal(await widgets(), 1);
   assert.equal(await page.evaluate(() => document.querySelectorAll("#item-9 .peekaboo").length), 1);
   assert.equal(await page.evaluate(() => document.querySelectorAll("table:not([hidden])").length), 1, "only the plain table shows");
 });

@@ -17,6 +17,23 @@ const frame = (page) => page.locator(".peekaboo-frame").first();
 const shot = (page, side) => frame(page).locator(`img.peekaboo-${side}`);
 const diffMode = (page) => page.getByRole("button", { name: "Diff" }).first().click();
 const alignButtons = (page) => page.locator(".peekaboo-align").first().getByRole("button");
+const coloured = (seen) => {
+  let count = 0;
+  for (let y = 0; y < seen.height; y++) for (let x = 0; x < seen.width; x++) if (isRed(seen.at(x, y)) || isGreen(seen.at(x, y))) count++;
+  return count;
+};
+// A horizontal run of the frame at row `y`: the hatch is white with thin grey lines, so it has both.
+const hatched = (seen, x, y) => {
+  const strip = Array.from({ length: 40 }, (_, i) => seen.at(x + i, y)[0]);
+  return strip.some((r) => r >= 250) && strip.some((r) => r <= 240);
+};
+// In full screen the frame is sized from the pair's shape: it keeps that shape and fits in the window.
+const fitsFullScreen = async (page, shape) => {
+  await page.getByRole("button", { name: "Full screen" }).click();
+  const { y, width, height } = await page.getByRole("dialog").locator(".peekaboo-frame").boundingBox();
+  await page.keyboard.press("Escape");
+  return Math.abs(width / height - shape) < 0.01 && y >= 0 && y + height <= 800;
+};
 
 // ---------- Diff ----------
 
@@ -62,6 +79,30 @@ test("Diff's key reads Before and After beside red and green until the worker ha
 
 // ---------- Two sizes ----------
 
+// At two densities every edge that falls between two pixels of the smaller capture is drawn differently by
+// each (here the 2x blocks start on odd device pixels), and Diff must not mark those; a real change of a
+// few pixels still shows. Diff adds nothing to the page's height either.
+test("Diff of a retina capture and a normal one marks a real change but not edges between pixels", async () => {
+  const blocks = [[101, 61, 200, 100], [401, 301, 120, 60], [151, 401, 300, 41]];
+  const retina = picture(800, 600, WHITE, blocks.map((block) => [...block, BLACK]));
+  // The same blocks at 1x: whole pixels black, the half pixel on each side mid-grey.
+  const normal = picture(400, 300, WHITE, [
+    ...blocks.map(([x, y, w, h]) => [(x - 1) / 2, (y - 1) / 2, (w + 2) / 2, (h + 2) / 2, [128, 128, 128]]),
+    ...blocks.map(([x, y, w, h]) => [(x + 1) / 2, (y + 1) / 2, (w - 2) / 2, (h - 2) / 2, BLACK]),
+    [300, 60, 8, 8, BLACK],
+  ]);
+  await withPullRequest(browser, pullRequest(pair(retina, normal)), {}, async ({ page }) => {
+    const pageHeight = () => page.evaluate(() => document.body.getBoundingClientRect().height);
+    const heightInFlip = await pageHeight();
+    await diffMode(page);
+    const seen = await pixels(frame(page));
+    assert.ok(isGreen(seen.at(305, 65)), `the added block: ${seen.at(305, 65)}`);
+    const elsewhere = coloured(seen) - coloured({ width: 16, height: 16, at: (x, y) => seen.at(296 + x, 56 + y) });
+    assert.equal(elsewhere, 0, "edges marked as changes");
+    assert.equal(await pageHeight(), heightInFlip);
+  });
+});
+
 test("scales a retina capture and a normal one of the same view to one size, with nothing to line up", async () => {
   const html = pullRequest(pair(picture(800, 600, WHITE), picture(400, 300, WHITE)));
   await withPullRequest(browser, html, {}, async ({ page }) => {
@@ -74,8 +115,9 @@ test("scales a retina capture and a normal one of the same view to one size, wit
 
 const wideAndNarrow = pair(picture(400, 300, WHITE), picture(300, 300, [120, 160, 255]));
 
+// On an ordinary Chrome page, where the userscript runs, `chrome` exists but has no extension runtime.
 test("two window widths keep one pixel scale and line up by Left, Center or Right; Auto needs the extension", async () => {
-  await withPullRequest(browser, pullRequest(wideAndNarrow), {}, async ({ page }) => {
+  await withPullRequest(browser, pullRequest(wideAndNarrow), { before: () => (window.chrome = { app: {} }) }, async ({ page }) => {
     const canvas = frame(page).locator(".peekaboo-canvas");
     const placed = async () => [await offsetWithin(shot(page, "before"), canvas), await offsetWithin(shot(page, "after"), canvas)];
     const wide = { x: 0, y: 0, width: 400, height: 300 };
@@ -89,13 +131,33 @@ test("two window widths keep one pixel scale and line up by Left, Center or Righ
   });
 });
 
+// The shared canvas is as wide as the wider side and as tall as the taller, whichever column each is in.
 test("the narrower side is the one that moves, whichever column it is in", async () => {
-  const html = pullRequest(pair(picture(300, 300, WHITE), picture(400, 300, WHITE)));
+  const html = pullRequest(pair(picture(300, 300, WHITE), picture(400, 350, WHITE)));
   await withPullRequest(browser, html, {}, async ({ page }) => {
+    assert.equal((await frame(page).boundingBox()).width, 402, "the frame holds the wider side and its 1px border");
+    assert.ok(await fitsFullScreen(page, 400 / 350), "the canvas's shape, in full screen");
     await page.getByRole("button", { name: "Right" }).click();
     const canvas = frame(page).locator(".peekaboo-canvas");
-    assert.equal((await offsetWithin(shot(page, "before"), canvas)).x, 100);
-    assert.equal((await offsetWithin(shot(page, "after"), canvas)).x, 0);
+    assert.deepEqual(await offsetWithin(shot(page, "before"), canvas), { x: 100, y: 0, width: 300, height: 300 });
+    assert.deepEqual(await offsetWithin(shot(page, "after"), canvas), { x: 0, y: 0, width: 400, height: 350 });
+  });
+});
+
+// Two window widths where the narrower is the right-hand part of the wider, either way round. Placed at
+// Right, the block both have lines up and shows no change, and a block only the narrower has is coloured
+// where it sits: green when it is After, red when it is Before.
+test("Diff compares a pair where it is placed, not where each screenshot starts", async () => {
+  const wide = picture(400, 300, WHITE, [[150, 100, 60, 40, BLACK]]);
+  const narrow = picture(300, 300, WHITE, [[50, 100, 60, 40, BLACK], [200, 200, 40, 20, BLACK]]);
+  await withPullRequest(browser, pullRequest(pair(wide, narrow), pair(narrow, wide)), {}, async ({ page }) => {
+    await page.getByRole("button", { name: "Right" }).first().click();
+    await diffMode(page);
+    for (const [index, onlyNarrow] of [[0, isGreen], [1, isRed]]) {
+      const seen = await pixels(page.locator(".peekaboo-frame").nth(index));
+      assert.ok(isNeutral(seen.at(181, 121)), `pair ${index + 1}, the block both have: ${seen.at(181, 121)}`);
+      assert.ok(onlyNarrow(seen.at(321, 211)), `pair ${index + 1}, the block only the narrower has: ${seen.at(321, 211)}`);
+    }
   });
 });
 
@@ -131,14 +193,20 @@ test("Diff compares only where both screenshots reach and hatches the rest as No
 });
 
 // A page that got longer: same width, so the top is where they line up and there is nothing to choose.
+// Showing Before, the taller After must not peek out below it; in Diff, the rows only After has are hatched.
 test("same width and different heights are top-aligned in a frame as tall as the taller, without alignment buttons", async () => {
-  const html = pullRequest(pair(picture(400, 300, WHITE), picture(400, 500, WHITE)));
+  const BLUE = [120, 160, 255];
+  const html = pullRequest(pair(picture(400, 300, WHITE), picture(400, 500, BLUE)));
   await withPullRequest(browser, html, {}, async ({ page }) => {
     const canvas = frame(page).locator(".peekaboo-canvas");
     assert.deepEqual(await offsetWithin(shot(page, "before"), canvas), { x: 0, y: 0, width: 400, height: 300 });
     assert.deepEqual(await offsetWithin(shot(page, "after"), canvas), { x: 0, y: 0, width: 400, height: 500 });
     assert.equal(await page.locator(".peekaboo-align").count(), 0);
+    assert.notDeepEqual((await pixels(frame(page))).at(201, 401), BLUE, "After shows below Before");
+    assert.ok(await fitsFullScreen(page, 400 / 500), "the canvas's shape, in full screen");
     await frame(page).click();
     assert.equal((await frame(page).boundingBox()).height, 502, "the frame keeps the taller screenshot's height on either side");
+    await diffMode(page);
+    assert.ok(hatched(await pixels(frame(page)), 101, 401), "the rows only After has are hatched");
   });
 });
