@@ -73,7 +73,7 @@ test("Auto puts a crop where it matches the full screenshot, and Diff then shows
 });
 
 // Either side can be the crop. In Diff, what the crop doesn't cover is hatched as not compared (to its
-// right, above it and below it), and what it covers isn't. Every strip runs over white in the screen.
+// left, right, above and below), and what it covers isn't. Every strip runs over white in the screen.
 test("a crop is placed where it matches whichever side it is, and Diff hatches what it doesn't cover", async () => {
   await withAuto(pullRequest(pair(SCREEN, cropOfScreen(...CROP)), pair(cropOfScreen(...CROP), SCREEN)), {}, async ({ page }) => {
     const canvas = (index) => page.locator(".peekaboo-canvas").nth(index);
@@ -82,7 +82,7 @@ test("a crop is placed where it matches whichever side it is, and Diff hatches w
     await diffMode(page);
     for (const index of [0, 1]) {
       const seen = await pixels(frame(page, index));
-      for (const [x, y] of [[601, 521], [201, 11], [301, 451]]) assert.equal(hatched(seen, x, y), true, `pair ${index + 1}, outside the crop at ${x}, ${y}`);
+      for (const [x, y] of [[601, 521], [601, 301], [201, 11], [21, 251], [301, 451]]) assert.equal(hatched(seen, x, y), true, `pair ${index + 1}, outside the crop at ${x}, ${y}`);
       assert.equal(hatched(seen, 131, 251), false, `pair ${index + 1}, inside the crop`);
     }
   });
@@ -219,6 +219,7 @@ test("until Auto-align is turned on, pairs are centred with a button that opens 
 test("without the permission, picking an edge drops the offer to turn Auto-align on", async () => {
   await withAuto(pullRequest(pair(SCREEN, cropOfScreen(...CROP))), { granted: false }, async ({ page }) => {
     await page.getByRole("button", { name: "Left" }).click();
+    assert.deepEqual(await pressedAlign(page), ["Left"]);
     assert.equal(await page.getByRole("button", { name: "Turn on Auto-align" }).count(), 0);
     assert.doesNotMatch(await barText(page), /Centered for now/);
     assert.deepEqual(await afterShot(page), { x: 0, y: 0, width: 440, height: 300 });
@@ -283,6 +284,8 @@ test("red means removed and green means added on dark screenshots as on light on
   );
   await withAuto(pullRequest(pairOn([20, 22, 26], [230, 230, 230]), pairOn(WHITE, BLACK)), {}, async ({ page }) => {
     assert.deepEqual(await visibleTags(page), ["Before", "Before"], "Flip names the side on screen");
+    await frame(page, 0).click();
+    assert.deepEqual(await visibleTags(page), ["After", "Before"], "Flip names the side on screen");
     await diffMode(page);
     for (const [index, theme] of ["dark", "light"].entries()) {
       const seen = await pixels(frame(page, index));
@@ -314,5 +317,11 @@ test("a retina capture against a normal one is diffed by the worker, at the size
     assert.ok(isGreen(seen.at(161, 201)), `the added 1px line: ${seen.at(161, 201)}`);
     assert.ok(isNeutral(seen.at(191, 113)), `a block both have: ${seen.at(191, 113)}`);
     assert.equal(await warnings(page), 0);
+    // Enlarged in full screen, the worker's diff is enlarged with the pair.
+    await page.getByRole("button", { name: "Full screen" }).click();
+    const big = page.getByRole("dialog").locator(".peekaboo-frame");
+    const scale = ((await big.boundingBox()).width - 2) / 400;
+    const at = [Math.round(1 + 160 * scale), Math.round(1 + 200.5 * scale)];
+    assert.ok(isGreen((await pixels(big)).at(...at)), `the added line, enlarged ${scale.toFixed(2)}×, at ${at}`);
   });
 });
