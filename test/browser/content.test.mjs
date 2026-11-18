@@ -41,6 +41,22 @@ test("drops a widget whose table GitHub removed", async () => {
   assert.equal(await widgets(), 2);
 });
 
+// GitHub can render a fresh table in place of the old one, leaving its wrapper (and so the widget before
+// it) where it was. The old widget goes, the new table gets one of its own and is hidden under it.
+test("rebuilds a table GitHub replaced on its own, without leaving the old widget", async () => {
+  await page.evaluate(() => {
+    const table = document.querySelector("#item-9 table");
+    const fresh = table.cloneNode(true);
+    fresh.removeAttribute("data-peekaboo");
+    fresh.hidden = false;
+    table.replaceWith(fresh);
+  });
+  await settle(page);
+  assert.equal(await widgets(), 2);
+  assert.equal(await page.evaluate(() => document.querySelectorAll("#item-9 .peekaboo").length), 1);
+  assert.equal(await page.evaluate(() => document.querySelectorAll("table:not([hidden])").length), 1, "only the plain table shows");
+});
+
 test("Flip blinks between before and after", async () => {
   const showing = () => page.evaluate(() => document.querySelector(".peekaboo-frame").dataset.showing);
   assert.equal(await showing(), "before");

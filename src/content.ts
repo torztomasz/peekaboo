@@ -78,9 +78,12 @@ function sync() {
   }
 }
 
+// A widget stands right before the table it was built for, which it marked. Anything else there (no table,
+// or a fresh table GitHub rendered in its place, not marked yet) means its own table is gone.
 function removeOrphanWidgets() {
   for (const widget of document.querySelectorAll<HTMLElement>(`.${PREFIX}`)) {
-    if (!(widget.nextElementSibling instanceof HTMLTableElement)) widget.remove();
+    const next = widget.nextElementSibling;
+    if (!(next instanceof HTMLTableElement) || !next.dataset[PROCESSED]) widget.remove();
   }
 }
 
