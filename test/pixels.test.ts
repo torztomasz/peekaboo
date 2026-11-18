@@ -147,9 +147,10 @@ test("counts only the overlap of a placed pair", () => {
 // side is the crop. On tiles of random greys, so reading the wrong pixel of either side shows up as changes.
 test("puts a crop's changes where the crop sits on the shared canvas, whichever side it is", () => {
   const page = tiles(300, 200), part = crop(page, 40, 30, 200, 120);
-  fill(part, 50, 20, 10, 5, [255, 0, 0]);
-  // The 10 × 5 block at (40 + 50, 30 + 20) on the canvas, dilated 1px.
-  const box = { x: 89, y: 49, width: 12, height: 7 };
+  fill(part, 150, 100, 10, 5, [255, 0, 0]);
+  // The 10 × 5 block at (40 + 150, 30 + 100) on the canvas, dilated 1px: towards the crop's far corner, so
+  // an overlap cut short by the crop's offset misses it.
+  const box = { x: 189, y: 129, width: 12, height: 7 };
   for (const overlay of [diffOverlay(page, part, at(40, 30)), diffOverlay(part, page, { beforeX: 40, beforeY: 30, afterX: 0, afterY: 0 })]) {
     assert.deepEqual([overlay.width, overlay.height, overlay.changed, overlay.box], [300, 200, 50, box]);
   }

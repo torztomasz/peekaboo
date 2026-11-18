@@ -175,12 +175,14 @@ test("an alignment picked on one pair applies to every pair and is remembered on
 });
 
 // Only the overlap can be compared. Before is wider here and has a block in the part After doesn't reach:
-// painting that red would claim it was removed, when After never showed that part of the page.
+// painting that red would claim it was removed, when After never showed that part of the page. The same
+// holds the other way round (second pair), and for a taller Before at one width (third pair).
 test("Diff compares only where both screenshots reach and hatches the rest as Not compared", async () => {
   const before = picture(400, 300, WHITE, [[40, 40, 80, 40, BLACK], [320, 120, 60, 60, BLACK]]);
   const after = picture(300, 300, WHITE);
-  await withPullRequest(browser, pullRequest(pair(before, after)), {}, async ({ page }) => {
-    assert.equal(await page.getByText("Not compared").isVisible(), false, "the key belongs to Diff");
+  const html = pullRequest(pair(before, after), pair(after, before), pair(picture(400, 500, WHITE, [[100, 400, 200, 50, BLACK]]), picture(400, 300, WHITE)));
+  await withPullRequest(browser, html, {}, async ({ page }) => {
+    assert.equal(await page.getByText("Not compared").first().isVisible(), false, "the key belongs to Diff");
     await diffMode(page);
     const seen = await pixels(frame(page));
     assert.ok(isRed(seen.at(81, 61)), `removed inside the overlap: ${seen.at(81, 61)}`);
@@ -188,7 +190,13 @@ test("Diff compares only where both screenshots reach and hatches the rest as No
     const strip = Array.from({ length: 40 }, (_, x) => seen.at(321 + x, 151));
     assert.ok(!strip.some((rgb) => isRed(rgb) || isGreen(rgb)), `no red or green outside the overlap: ${strip}`);
     assert.ok(strip.some(([r]) => r >= 250) && strip.some(([r]) => r <= 240), `hatched, not blank: ${strip.map(([r]) => r)}`);
-    assert.equal(await page.getByText("Not compared").isVisible(), true);
+    assert.equal(await page.getByText("Not compared").first().isVisible(), true);
+    for (const [index, x, y] of [[1, 321, 151], [2, 101, 421]]) {
+      const other = await pixels(page.locator(".peekaboo-frame").nth(index));
+      const run = Array.from({ length: 40 }, (_, i) => other.at(x + i, y));
+      assert.ok(!run.some((rgb) => isRed(rgb) || isGreen(rgb)), `pair ${index + 1}: no red or green outside the overlap: ${run}`);
+      assert.ok(hatched(other, x, y), `pair ${index + 1}: hatched outside the overlap`);
+    }
   });
 });
 

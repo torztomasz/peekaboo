@@ -153,7 +153,7 @@ test("its buttons show their icons, and Close closes", async () => {
       return dark;
     };
     // The page's button has its 16px icon left of the label, after 10px of padding and before a 6px gap.
-    const expand = page.getByRole("button", { name: "Full screen" }).first();
+    const expand = page.getByRole("button", { name: "Full screen", exact: true }).first();
     const labelStarts = await expand.evaluate((button) => {
       const range = document.createRange();
       range.selectNodeContents(button.lastChild);
@@ -161,7 +161,10 @@ test("its buttons show their icons, and Close closes", async () => {
     });
     assert.ok(labelStarts >= 32 && (await inked(expand, 27)) > 10, `Full screen has an icon beside its label (label at ${labelStarts})`);
     await expand.click();
-    for (const name of ["Previous pair (←)", "Next pair (→)", "Close (Esc)"]) assert.ok((await inked(dialog(page).getByRole("button", { name }))) > 10, `${name} has an icon`);
+    for (const name of ["Previous pair (←)", "Next pair (→)", "Close (Esc)"]) {
+      const button = dialog(page).getByRole("button", { name });
+      assert.ok((await inked(button)) > 10 && (await button.innerText()) === "", `${name} has an icon and no text`);
+    }
     await dialog(page).getByRole("button", { name: "Close (Esc)" }).click();
     assert.equal(await dialog(page).count(), 0);
   });

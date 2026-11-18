@@ -20,13 +20,13 @@ const visibleTags = (page) => page.locator(".peekaboo-tag:visible").allTextConte
 
 // ---------- Which tables ----------
 
-// The label is the other columns' text, not words written next to a screenshot; a pair without other
-// columns has no label at all.
+// The label is the other columns' text, not words written next to a screenshot or an empty column; a pair
+// without other columns has no label at all.
 test("finds Before and After by header, whatever the column order, and labels the pair from the other columns", async () => {
   const html = pullRequest(
     table({
-      headers: ["", "AFTER: this PR", "Theme", "Before (main)"],
-      rows: [["<strong>Mobile</strong>", image(afterShot), "Dark", `${image(beforeShot)} v1.4`]],
+      headers: ["", "AFTER: this PR", "Theme", "Before (main)", "Notes"],
+      rows: [["<strong>Mobile</strong>", `${image(afterShot)} new`, "Dark", `${image(beforeShot)} v1.4`, ""]],
     }),
     table({ headers: ["After", "Before"], rows: [[image(afterShot), image(beforeShot)]] }),
   );
@@ -182,6 +182,29 @@ test("Shift peeks only at the pair under the mouse, not while typing, until Shif
     await page.getByRole("textbox", { name: "Comment" }).focus();
     await frame.hover();
     assert.deepEqual(await holdingShift(() => shownColor(frame)), WHITE, "while typing in a text field");
+    // Peeking shows the other side: Before while After is on screen. In Diff it always shows After.
+    await page.evaluate(() => document.activeElement.blur());
+    await frame.click();
+    assert.deepEqual(await holdingShift(() => shownColor(frame)), WHITE, "from After");
+    await page.getByRole("button", { name: "Diff" }).click();
+    await frame.hover();
+    assert.deepEqual(await holdingShift(() => shownColor(frame)), BLUE, "in Diff, after flipping to After first");
+  });
+});
+
+// GitHub adds comments to an open page; the pairs already there keep what they show.
+test("a pair keeps the side it shows when another comment with a table arrives", async () => {
+  await withPullRequest(browser, pullRequest(pair(beforeShot, afterShot)), {}, async ({ page }) => {
+    await frames(page).click();
+    await page.evaluate((table) => {
+      const item = document.createElement("div");
+      item.className = "timeline-item";
+      item.innerHTML = `<div class="markdown-body">${table}</div>`;
+      document.querySelector(".timeline").append(item);
+    }, pair(beforeShot, afterShot));
+    await settle(page);
+    assert.equal(await frames(page).count(), 2);
+    assert.deepEqual([await shownColor(frames(page).nth(0)), await shownColor(frames(page).nth(1))], [BLUE, WHITE]);
   });
 });
 
