@@ -165,8 +165,10 @@ export const isNeutral = (rgb) => visibleHue(rgb).spread < 12;
 
 // A page running the worker's bundle behind a stub `chrome`: `ask(message)` sends it a message and resolves
 // with the reply (or rejects when none comes); `screens` (bench/screens.js) draws synthetic screenshots; `serve(url, canvas)` makes a
-// canvas fetchable at a GitHub-style URL; `granted`, `fetched` and `opened` are there to set and read.
-export async function openWorker(browser) {
+// canvas fetchable at a GitHub-style URL; `granted`, `fetched` and `opened` are there to set and read, and
+// `permissionQueries` lists what the worker asked Chrome's permissions about. `setup` runs in the page before
+// the worker's code, e.g. to take away what an older Chrome doesn't have.
+export async function openWorker(browser, setup) {
   const page = await browser.newPage();
   await page.addScriptTag({ content: readFileSync(new URL("../../bench/screens.js", import.meta.url), "utf8") });
   await page.addScriptTag({
@@ -184,15 +186,21 @@ export async function openWorker(browser) {
           onMessage: { addListener: (f) => (window.listener = f) }, onInstalled: { addListener: (f) => (window.installed = f) },
         },
         action: { onClicked: { addListener: (f) => (window.iconClicked = f) } },
-        permissions: { contains: async () => window.granted },
+        permissions: { contains: async (query) => (window.permissionQueries.push(query), window.granted) },
         tabs: { create: (tab) => window.opened.tabs.push(tab) },
       };
-      // A reply that never comes fails the test that asked, instead of hanging the run.
+      window.permissionQueries = [];
+      // A reply that never comes fails the test that asked, instead of hanging the run. As in Chrome, the
+      // channel closes when the listener returns, unless it returned true to reply later.
       window.ask = (message) => new Promise((resolve, reject) => {
-        setTimeout(() => reject(new Error("no reply from the worker to " + JSON.stringify(message).slice(0, 200))), ${WAIT_MS});
-        window.listener(message, {}, resolve);
+        const asked = JSON.stringify(message).slice(0, 200);
+        setTimeout(() => reject(new Error("no reply from the worker to " + asked)), ${WAIT_MS});
+        let replied = false;
+        const answersLater = window.listener(message, {}, (answer) => { replied = true; resolve(answer); });
+        if (answersLater !== true && !replied) reject(new Error("the worker closed the channel without replying to " + asked));
       });`,
   });
+  if (setup) await page.evaluate(setup);
   await page.addScriptTag({ content: await built("background.ts") });
   return page;
 }
