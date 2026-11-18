@@ -10,7 +10,8 @@ import { Stryker } from "@stryker-mutator/core";
 
 const browser = (...names) => `node --test ${names.map((name) => `test/browser/${name}.test.mjs`).join(" ")}`;
 const TARGETS = {
-  pixels: { mutate: ["src/pixels.ts"], command: "node --test test/pixels.test.ts" },
+  // uncounted.mjs: without it the instrumented pixel loops take minutes per run instead of seconds.
+  pixels: { mutate: ["src/pixels.ts"], command: "node --import ./scripts/uncounted.mjs --test test/pixels.test.ts" },
   content: { mutate: ["src/content.ts"], command: browser("content", "widget", "diff", "fullscreen", "auto") },
   background: { mutate: ["src/background.ts"], command: browser("worker", "auto") },
   options: { mutate: ["src/options.ts", "src/origins.ts"], command: browser("options") },
