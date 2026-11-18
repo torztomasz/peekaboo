@@ -54,8 +54,11 @@ export const pullRequest = (...comments) =>
 // ---------- The page ----------
 
 // Opens `html` as a pull request, runs the test, and fails it if the page threw along the way.
-// `serve`: extra URLs the route answers, as { url: (resourceType) => body | null }; null fails that request.
+// `serve`: extra URLs the route answers, as { url: (resourceType) => body | null }; null fails that request,
+// and a promise holds the response back until it settles (a slow image host).
 // `before` runs in the page ahead of the extension's code, e.g. to note what GitHub rendered.
+// `disconnected` (with `auto`): the extension was reloaded or removed under the open tab, so every message
+// to it throws, as Chrome's "Extension context invalidated" does.
 export async function withPullRequest(browser, html, options, run) {
   const pr = await openPullRequest(browser, html, options);
   try {
@@ -66,15 +69,15 @@ export async function withPullRequest(browser, html, options, run) {
   }
 }
 
-async function openPullRequest(browser, html, { auto = false, granted = true, serve = {}, before } = {}) {
+async function openPullRequest(browser, html, { auto = false, granted = true, disconnected = false, serve = {}, before } = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   context.setDefaultTimeout(WAIT_MS);
   const requests = [];
   const page = await context.newPage();
-  await context.route("**/*", (route) => {
+  await context.route("**/*", async (route) => {
     const url = route.request().url();
     if (url === PR_URL && isNavigationOf(page, route.request())) return route.fulfill({ contentType: "text/html", body: html });
-    const body = serve[url]?.(route.request().resourceType());
+    const body = await serve[url]?.(route.request().resourceType());
     if (body) return route.fulfill({ contentType: "image/png", headers: { "access-control-allow-origin": "*" }, body });
     if (!serve[url]) requests.push(url);
     return route.abort();
@@ -85,7 +88,7 @@ async function openPullRequest(browser, html, { auto = false, granted = true, se
     await page.goto(PR_URL);
     if (before) await page.evaluate(before);
     if (auto) {
-      await page.evaluate(standInChrome, granted);
+      await page.evaluate(standInChrome, { granted, disconnected });
       await page.addScriptTag({ content: await built("background.ts") });
     }
     await page.addScriptTag({ content: await built("content.ts") });
@@ -107,7 +110,7 @@ function isNavigationOf(page, request) {
 
 // Chrome's side of the extension: messages go straight to the worker's listener, and the calls a test
 // asserts on (tabs opened, the options page) are recorded on `window.chromeCalls`.
-function standInChrome(granted) {
+function standInChrome({ granted, disconnected }) {
   const listeners = [];
   const calls = (window.chromeCalls = { tabsCreated: [], optionsOpened: 0, unanswered: 0 });
   window.autoGranted = granted;
@@ -119,6 +122,7 @@ function standInChrome(granted) {
       getURL: (path) => `chrome-extension://peekaboo-under-test/${path}`,
       openOptionsPage: () => calls.optionsOpened++,
       sendMessage(message, callback) {
+        if (disconnected) throw new Error("Extension context invalidated.");
         if (callback) calls.unanswered++;
         const reply = (answer) => { calls.unanswered--; callback(answer); };
         for (const listener of listeners) listener(message, { tab: { id: 7, index: 2 } }, reply);

@@ -74,12 +74,96 @@ test("1 and 2 switch every pair between Flip and Diff, and Space flips the pair 
 });
 
 // A clicked button would keep focus and take Space for itself.
-test("Space still flips after a toolbar button was clicked with the mouse", async () => {
+// The dialog's own Flip and Diff do what 1 and 2 do, and say which is on. A clicked button would keep
+// focus and take Space and Enter for itself, so after a click both still flip the pair.
+test("the dialog's Flip and Diff buttons switch every pair, and Space and Enter still flip after a click", async () => {
   await withPullRequest(browser, threePairs, {}, async ({ page }) => {
+    const pressedInDialog = () => dialog(page).getByRole("button", { pressed: true }).allTextContents();
     await open(page);
-    await dialog(page).getByRole("button", { name: "Next pair (→)" }).click();
+    assert.deepEqual(await pressedInDialog(), ["Flip"]);
+    await dialog(page).getByRole("button", { name: "Diff", exact: true }).click();
+    assert.deepEqual(await pressedInDialog(), ["Diff"]);
+    await dialog(page).getByRole("button", { name: "Flip", exact: true }).click();
+    assert.deepEqual(await pressedInDialog(), ["Flip"]);
     await page.keyboard.press("Space");
+    assert.deepEqual(await colorIn(dialog(page).locator(".peekaboo-frame")), BLUE);
+    await dialog(page).getByRole("button", { name: "Next pair (→)" }).click();
+    await page.keyboard.press("Enter");
     assert.deepEqual([await showing(page), await colorIn(dialog(page).locator(".peekaboo-frame"))], [["2 / 3", "Mobile", CAPTION], BLUE]);
+  });
+});
+
+// The keys are the fast way through a pull request's pairs, and tooltips only tell people who hover. In
+// Diff, Space has nothing to flip and Shift shows After, whether Diff was on before opening or not.
+test("lists its keys, as they work in Flip and in Diff", async () => {
+  await withPullRequest(browser, threePairs, {}, async ({ page }) => {
+    const keys = () => dialog(page).locator(".peekaboo-viewer-key:visible").allTextContents();
+    const inFlip = ["←→ pair", "Space flip", "Shift hold to peek", "12 Flip / Diff", "Esc close"];
+    const inDiff = ["←→ pair", "Shift hold for After", "12 Flip / Diff", "Esc close"];
+    await open(page);
+    assert.deepEqual(await keys(), inFlip);
+    await page.keyboard.press("2");
+    assert.deepEqual(await keys(), inDiff);
+    await page.keyboard.press("Escape");
+    await open(page);
+    assert.deepEqual(await keys(), inDiff, "opened in Diff");
+  });
+});
+
+// GitHub re-renders a comment by building it anew; the pairs still come in page order.
+test("steps through the pairs in page order after GitHub re-renders a comment above", async () => {
+  await withPullRequest(browser, threePairs, {}, async ({ page }) => {
+    await page.evaluate((html) => (document.querySelector(".markdown-body").innerHTML = html), labelled);
+    await settle(page);
+    await open(page, 1);
+    assert.deepEqual(await showing(page), ["3 / 3", null, null]);
+    await page.keyboard.press("ArrowRight");
+    assert.deepEqual(await showing(page), ["1 / 3", "Desktop", CAPTION]);
+  });
+});
+
+// PR authors put one italic line under a table to say what it fixes; other text there isn't its caption.
+test("takes as a pair's caption only an italic line of its own right under the table", async () => {
+  const shots = [[image(beforeShot), image(afterShot)]];
+  const html = pullRequest(
+    `${table({ rows: shots })}<p dir="auto"><em>Only part</em> of this line is italic</p>`,
+    `${table({ rows: shots })}<p dir="auto">Plain text under the table</p>`,
+    `${table({ rows: shots })}<p dir="auto"><strong>Bold, not italic</strong></p>`,
+    `${table({ rows: shots })}<div><em>Italic, but not a paragraph</em></div>`,
+    pair(beforeShot, afterShot, { caption: CAPTION }),
+  );
+  await withPullRequest(browser, html, {}, async ({ page }) => {
+    await open(page);
+    const captions = [];
+    for (let i = 0; i < 5; i++) {
+      captions.push((await showing(page))[2]);
+      await page.keyboard.press("ArrowRight");
+    }
+    assert.deepEqual(captions, [null, null, null, null, CAPTION]);
+  });
+});
+
+test("its buttons show their icons, and Close closes", async () => {
+  await withPullRequest(browser, threePairs, {}, async ({ page }) => {
+    // Pixels darker than the border (#d1d9e0) in the button, or in its first `width` pixels from the left.
+    const inked = async (button, width = Infinity) => {
+      const seen = await pixels(button);
+      let dark = 0;
+      for (let y = 0; y < seen.height; y++) for (let x = 0; x < Math.min(width, seen.width); x++) if (seen.at(x, y)[0] < 180) dark++;
+      return dark;
+    };
+    // The page's button has its 16px icon left of the label, after 10px of padding and before a 6px gap.
+    const expand = page.getByRole("button", { name: "Full screen" }).first();
+    const labelStarts = await expand.evaluate((button) => {
+      const range = document.createRange();
+      range.selectNodeContents(button.lastChild);
+      return range.getBoundingClientRect().left - button.getBoundingClientRect().left;
+    });
+    assert.ok(labelStarts >= 32 && (await inked(expand, 27)) > 10, `Full screen has an icon beside its label (label at ${labelStarts})`);
+    await expand.click();
+    for (const name of ["Previous pair (←)", "Next pair (→)", "Close (Esc)"]) assert.ok((await inked(dialog(page).getByRole("button", { name }))) > 10, `${name} has an icon`);
+    await dialog(page).getByRole("button", { name: "Close (Esc)" }).click();
+    assert.equal(await dialog(page).count(), 0);
   });
 });
 
@@ -111,6 +195,7 @@ test("Esc closes, puts each pair back in its place, lets the page scroll again a
   await withPullRequest(browser, threePairs, {}, async ({ page }) => {
     const pageScrolls = () => page.evaluate(() => getComputedStyle(document.documentElement).overflow !== "hidden");
     await open(page);
+    assert.equal(await dialog(page).getAttribute("aria-modal"), "true");
     assert.equal(await pageScrolls(), false);
     await page.keyboard.press("ArrowRight");
     await page.keyboard.press("ArrowLeft");
@@ -137,16 +222,41 @@ test("closing on another pair scrolls to it and focuses it", async () => {
   });
 });
 
-test("Tab and Shift+Tab stay inside the dialog", async () => {
+// The dialog opens with the pair focused; Tab walks its controls in order and wraps around, both ways.
+test("Tab and Shift+Tab stay inside the dialog, going round its controls in order", async () => {
   await withPullRequest(browser, threePairs, {}, async ({ page }) => {
     await open(page);
-    const stops = new Set();
-    for (const key of [...Array(8).fill("Tab"), ...Array(8).fill("Shift+Tab")]) {
-      await page.keyboard.press(key);
-      assert.equal(await page.evaluate(() => Boolean(document.activeElement.closest("[role=dialog]"))), true, `${key} left the dialog`);
-      stops.add(await page.evaluate(() => document.activeElement.title || document.activeElement.className));
-    }
-    assert.ok(stops.size >= 5, `control: focus moved through the dialog's controls (${[...stops]})`);
+    const focused = () => page.evaluate(() => {
+      const node = document.activeElement;
+      if (!node.closest("[role=dialog]")) return "outside the dialog";
+      return node.getAttribute("aria-label") ?? (node.tagName === "BUTTON" ? node.textContent : "the pair");
+    });
+    const after = async (key, times) => {
+      const seen = [];
+      for (let i = 0; i < times; i++) {
+        await page.keyboard.press(key);
+        seen.push(await focused());
+      }
+      return seen;
+    };
+    assert.equal(await focused(), "the pair");
+    assert.deepEqual(await after("Tab", 7), ["Previous pair (←)", "Next pair (→)", "Flip", "Diff", "Close (Esc)", "the pair", "Previous pair (←)"]);
+    assert.deepEqual(await after("Shift+Tab", 3), ["the pair", "Close (Esc)", "Diff"]);
+  });
+});
+
+// Closing on the first pair, opened from one lower down: the opener is now below the screen, so focus
+// goes to the pair the reviewer was looking at.
+test("closing on the first pair, opened from further down, scrolls to it and focuses it", async () => {
+  const farApart = pullRequest(pair(beforeShot, afterShot), "<p style='height: 3000px'>A long discussion</p>", pair(beforeShot, afterShot));
+  await withPullRequest(browser, farApart, {}, async ({ page }) => {
+    await open(page, 1);
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Escape");
+    const first = page.locator(".peekaboo-frame").first();
+    const { y, height } = await first.boundingBox();
+    assert.ok(y >= 0 && y + height <= 800, `the pair is at ${y}, off screen`);
+    assert.equal(await first.evaluate((frame) => document.activeElement === frame), true);
   });
 });
 
